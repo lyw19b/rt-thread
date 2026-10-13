@@ -1,0 +1,4 @@
+%rename link rtt_link
+
+*link:
+%(rtt_link) --defsym=malloc=rt_malloc --defsym=calloc=rt_calloc --defsym=realloc=rt_realloc --defsym=free=rt_free --defsym=__libc_malloc_impl=rt_malloc --defsym=__libc_calloc=rt_calloc --defsym=__libc_realloc=rt_realloc --defsym=__libc_free=rt_free

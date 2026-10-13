@@ -59,44 +59,15 @@
 #define LS2K_GPIO2_INT_IRQ          (62)
 #define LS2K_GPIO3_INT_IRQ          (63)
 
-// 0x1fe01400 ENTRY0_0
-#define LIOINTC0_BASE    PHYS_TO_UNCACHED(0x1fe01400)
-// 0x1fe01440 ENTRY0_1
-#define LIOINTC1_BASE    PHYS_TO_UNCACHED(0x1fe01440)
+/* LS2K1000LA routes to core 0 / INT0, including the core-selection bit. */
+#define LS2K_CONFIG_BASE           0x1fe00000UL
+#define LS2K_LIO_ROUTE_VALUE       0x11
+#define LS2K_LIO_HAS_BOUNCE        1
+#include "liointc.h"
 
-// 0x1fe01040 CORE0_INTISR0
-#define CORE0_INTISR0    PHYS_TO_UNCACHED(0x1fe01040)
-// 0x1fe01048 CORE0_INTISR1
-#define CORE0_INTISR1    PHYS_TO_UNCACHED(0x1fe01048)
-
-#define LIOINTC_INTC_CHIP_START      0x20
-#define LIOINTC_REG_INTC_STATUS      (LIOINTC_INTC_CHIP_START + 0x00)
-#define LIOINTC_REG_INTC_EN_STATUS   (LIOINTC_INTC_CHIP_START + 0x04)
-#define LIOINTC_REG_INTC_ENABLE      (LIOINTC_INTC_CHIP_START + 0x08)
-#define LIOINTC_REG_INTC_DISABLE     (LIOINTC_INTC_CHIP_START + 0x0c)
-#define LIOINTC_REG_INTC_POL         (LIOINTC_INTC_CHIP_START + 0x10)
-#define LIOINTC_REG_INTC_EDGE        (LIOINTC_INTC_CHIP_START + 0x14)
-#define LIOINTC_REG_BOUNCE           (LIOINTC_INTC_CHIP_START + 0x18)
-#define LIOINTC_REG_INTC_AUTO        (LIOINTC_INTC_CHIP_START + 0x1c)
-
-#define LS2K_IRQ_ROUTE_REG(i)  (PHYS_TO_UNCACHED(0x1fe01400) + 0x00 + (((i) > 31) ? 0x40 : 0) + ((i) % 32))
-#define LS2K_INTISR_REG(i)     (PHYS_TO_UNCACHED(0x1fe01400) + 0x20 + (((i) > 31) ? 0x40 : 0))
-#define LS2K_INTEN_REG(i)      (PHYS_TO_UNCACHED(0x1fe01400) + 0x24 + (((i) > 31) ? 0x40 : 0))
-#define LS2K_INTENSET_REG(i)   (PHYS_TO_UNCACHED(0x1fe01400) + 0x28 + (((i) > 31) ? 0x40 : 0))
-#define LS2K_INTENCLR_REG(i)   (PHYS_TO_UNCACHED(0x1fe01400) + 0x2c + (((i) > 31) ? 0x40 : 0))
-#define LS2K_INTPOL_REG(i)     (PHYS_TO_UNCACHED(0x1fe01400) + 0x30 + (((i) > 31) ? 0x40 : 0))
-#define LS2K_INTEDGE_REG(i)    (PHYS_TO_UNCACHED(0x1fe01400) + 0x34 + (((i) > 31 ) ? 0x40 : 0))
-#define LS2K_BOUNCE_REG(i)     (PHYS_TO_UNCACHED(0x1fe01400) + 0x38 + (((i) > 31) ? 0x40 : 0))
-#define LS2K_INTAUTO_REG(i)    (PHYS_TO_UNCACHED(0x1fe01400) + 0x3c + (((i) > 31) ? 0x40 : 0))
-
-#define LS2K_COREISR_REG0(i)   (PHYS_TO_UNCACHED(0x1fe01040) + (i) * 0x100)
-#define LS2K_COREISR_REG1(i)   (PHYS_TO_UNCACHED(0x1fe01040) + 8 + (i) * 0x100)
-
-#define LIOINTC_SHIFT_INTx          (4)
-#define LIOINTC_COREx_INTy(x, y)    ((1 << x) | (1 << (y + LIOINTC_SHIFT_INTx)))
-
-#define LS2K_IRQ_ROUTE_REG_NEW(i)  ((CSR_DMW0_BASE | 0x1fe01400) + 0x00 + (((i) > 31) ? 0x40 : 0) + ((i) % 32))
-
+static inline void ls2k_interrupt_prepare(void)
+{
+}
 
 void liointc_set_irq_mode(int irq, int mode);
 void rt_hw_interrupt_init(void);
