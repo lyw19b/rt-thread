@@ -1,7 +1,7 @@
 #ifndef __LS2K_PCI_H__
 #define __LS2K_PCI_H__
 
-#include <rttypes.h>
+#include <rtthread.h>
 
 struct pci_header
 {
@@ -30,5 +30,7 @@ struct pci_header
 };
 
 rt_uint64_t pci_get_device_map_addr(rt_uint64_t bus, rt_uint64_t device, rt_uint64_t function, rt_uint64_t index);
+
+rt_err_t ls2k_pci_enable_gmac(unsigned int port, rt_ubase_t *base);
 
 #endif // __LS2K_PCI_H__

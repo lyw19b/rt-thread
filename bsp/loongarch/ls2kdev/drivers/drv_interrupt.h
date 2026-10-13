@@ -99,6 +99,6 @@
 
 
 void liointc_set_irq_mode(int irq, int mode);
-void rt_hw_interrupt_init();
+void rt_hw_interrupt_init(void);
 
 #endif // __LS2K_INTERRUPT_H__

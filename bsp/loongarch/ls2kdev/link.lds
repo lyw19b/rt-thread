@@ -159,6 +159,13 @@ SECTIONS
     __bss_end = .;
     } > SRAM
 
+    /* DMA storage is never initialized through the cached kernel alias. */
+    .gmac_dma (NOLOAD) : ALIGN(64)
+    {
+        *(.gmac_dma)
+        . = ALIGN(64);
+    } > SRAM :NONE
+
     _end = .;
 
     /* Stabs debugging sections.  */
