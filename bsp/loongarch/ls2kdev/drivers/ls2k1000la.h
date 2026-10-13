@@ -1,0 +1,195 @@
+#ifndef __LS2K1000LA_H__
+#define __LS2K1000LA_H__
+
+#define CACHED_MEMORY_ADDR      0x9000000000000000
+#define UNCACHED_MEMORY_ADDR    0x8000000000000000
+
+#define IS_CACHED_ADDR(x)       (!!(((x) & 0xff00000000000000ULL) == CACHED_MEMORY_ADDR))
+#define TO_PHYS_MASK            (0xFFFFFFFFFFFF)
+#define VA_TO_PHYS(x)           ((unsigned long long)(x) & TO_PHYS_MASK)
+#define	PHYS_TO_CACHED(x)       (CACHED_MEMORY_ADDR | VA_TO_PHYS(x))
+#define	PHYS_TO_UNCACHED(x)     (UNCACHED_MEMORY_ADDR | VA_TO_PHYS(x))
+#define CACHED_TO_PHYS(x)       (VA_TO_PHYS(x))
+#define UNCACHED_TO_PHYS(x)     (VA_TO_PHYS(x))
+#define	CACHED_TO_UNCACHED(x)   (PHYS_TO_UNCACHED(x))
+#define UNCACHED_TO_CACHED(x)   (PHYS_TO_CACHED(x))
+
+
+#define LS_APB_BASE                 PHYS_TO_UNCACHED(0x1fe20000)
+#define LS_UART0_REG_BASE           (LS_APB_BASE + 0x000)
+#define LS_UART1_REG_BASE           (LS_APB_BASE + 0x100)
+#define LS_UART2_REG_BASE           (LS_APB_BASE + 0x200)
+#define LS_UART3_REG_BASE           (LS_APB_BASE + 0x300)
+#define LS_UART4_REG_BASE           (LS_APB_BASE + 0x400)
+#define LS_UART5_REG_BASE           (LS_APB_BASE + 0x500)
+#define LS_UART6_REG_BASE           (LS_APB_BASE + 0x600)
+#define LS_UART7_REG_BASE           (LS_APB_BASE + 0x700)
+#define LS_UART8_REG_BASE           (LS_APB_BASE + 0x800)
+#define LS_UART9_REG_BASE           (LS_APB_BASE + 0x900)
+#define LS_UART10_REG_BASE          (LS_APB_BASE + 0xA00)
+#define LS_UART11_REG_BASE          (LS_APB_BASE + 0xB00)
+#define LS_ACPI_REG_BASE            (LS_APB_BASE + 0x7000)
+#define LS_RTC_REG_BASE             (LS_APB_BASE + 0x7800)
+#define LS_ACPI_PM1_STS_OFFSET      (0x0c)
+#define LS_PM1_STS_PWRBTN_STS       _BIT(8)
+
+#define LS_SATA_CONF                PHYS_TO_UNCACHED(0x1fe00450)
+#define LS_SATA_BASE                PHYS_TO_UNCACHED(0x400e0000)
+
+// PLL
+#define LS_NODE_PLL_L       PHYS_TO_UNCACHED(0x1fe00480)
+#define LS_NODE_PLL_H       PHYS_TO_UNCACHED(0x1fe00488)
+#define LS_DDR_PLL_L        PHYS_TO_UNCACHED(0x1fe00490)
+#define LS_DDR_PLL_H        PHYS_TO_UNCACHED(0x1fe00498)
+#define LS_DC_PLL_L         PHYS_TO_UNCACHED(0x1fe004a0)
+#define LS_DC_PLL_H         PHYS_TO_UNCACHED(0x1fe004a8)
+#define LS_PIX0_PLL_L       PHYS_TO_UNCACHED(0x1fe004b0)
+#define LS_PIX0_PLL_H       PHYS_TO_UNCACHED(0x1fe004b8)
+#define LS_PIX1_PLL_L       PHYS_TO_UNCACHED(0x1fe004c0)
+#define LS_PIX1_PLL_H       PHYS_TO_UNCACHED(0x1fe004c8)
+#define LS_FREQ_SCALE       PHYS_TO_UNCACHED(0x1fe004d0)
+
+// node pll
+#define NODE_L2DIV_OUT_SHIFT      0
+#define NODE_L1DIV_OUT_SHIFT      42
+#define NODE_L1DIV_LOOPC_SHIFT    32
+#define NODE_L1DIV_REF_SHIFT      26
+
+#define NODE_L2DIV_OUT_WIDTH      6
+#define NODE_L1DIV_OUT_WIDTH      6
+#define NODE_L1DIV_LOOPC_WIDTH    10
+#define NODE_L1DIV_REF_WIDTH      6
+
+#define NODE_L2DIV_OUT_MARK       0x3f
+#define NODE_L1DIV_OUT_MARK       0x3f
+#define NODE_L1DIV_LOOPC_MARK     0x3ff
+#define NODE_L1DIV_REF_MARK       0x3f
+
+// ddr pll
+#define DDR_L2DIV_OUT_HDA_SHIFT   44
+#define DDR_L2DIV_OUT_GPU_SHIFT   22
+#define DDR_L2DIV_OUT_DDR_SHIFT   0
+#define DDR_L1DIV_OUT_SHIFT       42
+#define DDR_L1DIV_LOOPC_SHIFT     32
+#define DDR_L1DIV_REF_SHIFT       26
+
+#define DDR_L2DIV_OUT_HDA_WIDTH   7
+#define DDR_L2DIV_OUT_GPU_WIDTH   6
+#define DDR_L2DIV_OUT_DDR_WIDTH   6
+#define DDR_L1DIV_OUT_WIDTH       6
+#define DDR_L1DIV_LOOPC_WIDTH     10
+#define DDR_L1DIV_REF_WIDTH       6
+
+#define DDR_L2DIV_OUT_HDA_MARK    0x7f
+#define DDR_L2DIV_OUT_GPU_MARK    0x3f
+#define DDR_L2DIV_OUT_DDR_MARK    0x3f
+#define DDR_L1DIV_OUT_MARK        0x3f
+#define DDR_L1DIV_LOOPC_MARK      0x3ff
+#define DDR_L1DIV_REF_MARK        0x3f
+
+// dc pll
+#define DC_L2DIV_OUT_GMAC_SHIFT   22
+#define DC_L2DIV_OUT_DC_SHIFT     0
+#define DC_L1DIV_OUT_SHIFT        42
+#define DC_L1DIV_LOOPC_SHIFT      32
+#define DC_L1DIV_REF_SHIFT        26
+
+#define DC_L2DIV_OUT_GMAC_WIDTH   6
+#define DC_L2DIV_OUT_DC_WIDTH     6
+#define DC_L1DIV_OUT_WIDTH        6
+#define DC_L1DIV_LOOPC_WIDTH      10
+#define DC_L1DIV_REF_WIDTH        6
+
+#define DC_L2DIV_OUT_GMAC_MARK    0x3f
+#define DC_L2DIV_OUT_DC_MARK      0x3f
+#define DC_L1DIV_OUT_MARK         0x3f
+#define DC_L1DIV_LOOPC_MARK       0x3ff
+#define DC_L1DIV_REF_MARK         0x3f
+
+// pix pll
+#define PIX_L2DIV_OUT_PIX_SHIFT   0
+#define PIX_L1DIV_OUT_SHIFT       42
+#define PIX_L1DIV_LOOPC_SHIFT     32
+#define PIX_L1DIV_REF_SHIFT       26
+
+#define PIX_L2DIV_OUT_GMAC_WIDTH  6
+#define PIX_L2DIV_OUT_DC_WIDTH    6
+#define PIX_L1DIV_OUT_WIDTH       6
+#define PIX_L1DIV_LOOPC_WIDTH     10
+#define PIX_L1DIV_REF_WIDTH       6
+
+#define PIX_L2DIV_OUT_PIX_MARK    0x3f
+#define PIX_L1DIV_OUT_MARK        0x3f
+#define PIX_L1DIV_LOOPC_MARK      0x3ff
+#define PIX_L1DIV_REF_MARK        0x3f
+
+// freqscale
+#define FREQSCALE_APB_SHIFT       20
+#define FREQSCALE_USB_SHIFT       16
+#define FREQSCALE_SATA_SHIFT      12
+#define FREQSCALE_BOOT_SHIFT      8
+#define FREQSCALE_NODE_SHIFT      0
+
+#define FREQSCALE_APB_MARK        0x7
+#define FREQSCALE_USB_MARK        0x7
+#define FREQSCALE_SATA_MARK       0x7
+#define FREQSCALE_BOOT_MARK       0x7
+#define FREQSCALE_NODE_MARK       0x7
+
+
+#define THSENS_INT_CTL_HI_REG     PHYS_TO_UNCACHED(0x1fe01500)
+#define THSENS_INT_CTL_LO_REG     PHYS_TO_UNCACHED(0x1fe01508)
+#define THSENS_INT_CTL_SR_CLR_REG PHYS_TO_UNCACHED(0x1fe01510)
+#define THSENS_SCALE_HI_REG       PHYS_TO_UNCACHED(0x1fe01520)
+#define THSENS_SCALE_LO_REG       PHYS_TO_UNCACHED(0x1fe01528)
+
+
+// ACPI
+#define LS_PM_SOC_REG       (LS_ACPI_REG_BASE + 0x00)
+#define LS_PM_RESUME_REG    (LS_ACPI_REG_BASE + 0x04)
+#define LS_PM_RTC_REG       (LS_ACPI_REG_BASE + 0x08)
+#define LS_PM1_STS_REG      (LS_ACPI_REG_BASE + 0x0c)
+#define LS_PM1_EN_REG       (LS_ACPI_REG_BASE + 0x10)
+#define LS_PM1_CNT_REG      (LS_ACPI_REG_BASE + 0x14)
+#define LS_PM1_TMR_REG      (LS_ACPI_REG_BASE + 0x18)
+#define LS_P_CNT_REG        (LS_ACPI_REG_BASE + 0x1c)
+#define LS_P_LVL2_REG       (LS_ACPI_REG_BASE + 0x20)
+#define LS_P_LVL3_REG       (LS_ACPI_REG_BASE + 0x24)
+#define LS_GPE0_STS_REG     (LS_ACPI_REG_BASE + 0x28)
+#define LS_GPE0_EN_REG      (LS_ACPI_REG_BASE + 0x2c)
+#define LS_RST_CNT_REG      (LS_ACPI_REG_BASE + 0x30)
+#define LS_WD_SET_REG       (LS_ACPI_REG_BASE + 0x34)
+#define LS_WD_TIMER_REG     (LS_ACPI_REG_BASE + 0x38)
+#define LS_DVFS_CNT_REG     (LS_ACPI_REG_BASE + 0x3c)
+#define LS_DVFS_STS_REG     (LS_ACPI_REG_BASE + 0x40)
+#define LS_MS_CNT_REG       (LS_ACPI_REG_BASE + 0x44)
+#define LS_MS_THT_REG       (LS_ACPI_REG_BASE + 0x48)
+#define	LS_THSENS_CNT_REG   (LS_ACPI_REG_BASE + 0x4c)
+#define LS_GEN_RTC1_REG     (LS_ACPI_REG_BASE + 0x50)
+#define LS_GEN_RTC2_REG     (LS_ACPI_REG_BASE + 0x54)
+
+
+#define LS_PCIE_APB_ADDR            PHYS_TO_UNCACHED(0xfe00001000)
+#define LS_PCIE_GMAC0_ADDR          PHYS_TO_UNCACHED(0xfe00001800)
+#define LS_PCIE_GMAC1_ADDR          PHYS_TO_UNCACHED(0xfe00001900)
+#define LS_PCIE_USB_OTG_ADDR        PHYS_TO_UNCACHED(0xfe00002000)
+#define LS_PCIE_USB_EHCI_ADDR       PHYS_TO_UNCACHED(0xfe00002100)
+#define LS_PCIE_USB_OHCI_ADDR       PHYS_TO_UNCACHED(0xfe00002200)
+#define LS_PCIE_GPU_ADDR            PHYS_TO_UNCACHED(0xfe00002800)
+#define LS_PCIE_DC_ADDR             PHYS_TO_UNCACHED(0xfe00003000)
+#define LS_PCIE_HDA_ADDR            PHYS_TO_UNCACHED(0xfe00003800)
+#define LS_PCIE_SATA_ADDR           PHYS_TO_UNCACHED(0xfe00004000)
+#define LS_PCIE_PCIE0_P0_ADDR       PHYS_TO_UNCACHED(0xfe00004800)
+#define LS_PCIE_PCIE0_P1_ADDR       PHYS_TO_UNCACHED(0xfe00005000)
+#define LS_PCIE_PCIE0_P2_ADDR       PHYS_TO_UNCACHED(0xfe00005800)
+#define LS_PCIE_PCIE0_P3_ADDR       PHYS_TO_UNCACHED(0xfe00006000)
+#define LS_PCIE_PCIE1_P0_ADDR       PHYS_TO_UNCACHED(0xfe00006800)
+#define LS_PCIE_PCIE1_P1_ADDR       PHYS_TO_UNCACHED(0xfe00007000)
+#define LS_PCIE_DMA_ADDR            PHYS_TO_UNCACHED(0xfe00007800)
+
+
+#define LS_PCICFG2_RECFG            PHYS_TO_UNCACHED(0x1fe03800)
+#define LS_SPI_IO_REG_BASE          PHYS_TO_UNCACHED(0x1fff0220)
+
+
+#endif // __LS2K1000LA_H__

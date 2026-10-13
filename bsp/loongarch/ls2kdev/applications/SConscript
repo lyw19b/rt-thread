@@ -1,0 +1,10 @@
+from building import *
+
+cwd = GetCurrentDir()
+src = Glob('*.c')
+
+# SrcRemove(src, 'mnt.c')
+
+group = DefineGroup('Applications', src, depend = [''])
+
+Return('group')

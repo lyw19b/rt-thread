@@ -1,0 +1,10 @@
+from building import *
+
+cwd = GetCurrentDir()
+src = Glob('*.c') + Glob('./C/*.c')
+
+CPPPATH = [cwd]
+
+group = DefineGroup('Drivers', src, depend = ['RT_USING_LWIP'], CPPPATH = CPPPATH)
+
+Return('group')
