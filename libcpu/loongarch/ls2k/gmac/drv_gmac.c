@@ -6,9 +6,7 @@
 #include <rthw.h>
 #include <netif/ethernetif.h>
 #include <lwip/pbuf.h>
-#include "ls2k1000la.h"
-#include "drv_interrupt.h"
-#include "drv_pci.h"
+#include "ls2k.h"
 #include "gmac.h"
 
 #define DBG_TAG "ls2k.gmac"
@@ -348,19 +346,18 @@ static int _address_init(struct gmac_device *dev, const char *setting, unsigned 
 static int _register_port(struct gmac_device *dev, struct gmac_dma_memory *storage,
                           unsigned int port, int phy, const char *address)
 {
-    struct gmac_dma_memory *dma = (void *)PHYS_TO_UNCACHED(storage);
+    struct gmac_dma_memory *dma = (void *)LS2K_UNCACHED(storage);
     int error;
 
     dev->name = port ? "e1" : "e0";
-    dev->irq = port ? LS2K_GMAC1_SBD_IRQ : LS2K_GMAC0_SBD_IRQ;
     dev->phy_address = phy;
-    error = ls2k_pci_enable_gmac(port, &dev->base);
+    error = ls2k_gmac_platform_init(port, &dev->base, &dev->irq);
     if (error)
     {
-        LOG_E("%s: PCI BAR unavailable (%d); bootloader must assign it", dev->name, error);
+        LOG_E("%s: platform initialization failed (%d)", dev->name, error);
         return error;
     }
-    if (VA_TO_PHYS(storage) + sizeof(*storage) > (1ULL << 32))
+    if (LS2K_PHYSICAL(storage) + sizeof(*storage) > ls2k_gmac_dma_limit())
         return -RT_EINVAL;
     error = _address_init(dev, address, port);
     if (error)
@@ -370,9 +367,9 @@ static int _register_port(struct gmac_device *dev, struct gmac_dma_memory *stora
     dev->mac.context = dev;
     dev->mac.mdio_clock = BSP_GMAC_MDIO_CLOCK;
     dev->mac.tx = (struct ls2k_gmac_ring){dma->tx, &dma->tx_buffers[0][0],
-        VA_TO_PHYS(dma->tx), VA_TO_PHYS(dma->tx_buffers), BSP_GMAC_RING_SIZE};
+        LS2K_PHYSICAL(dma->tx), LS2K_PHYSICAL(dma->tx_buffers), BSP_GMAC_RING_SIZE};
     dev->mac.rx = (struct ls2k_gmac_ring){dma->rx, &dma->rx_buffers[0][0],
-        VA_TO_PHYS(dma->rx), VA_TO_PHYS(dma->rx_buffers), BSP_GMAC_RING_SIZE};
+        LS2K_PHYSICAL(dma->rx), LS2K_PHYSICAL(dma->rx_buffers), BSP_GMAC_RING_SIZE};
     rt_mutex_init(&dev->lock, dev->name, RT_IPC_FLAG_PRIO);
     dev->parent.parent.ops = &device_ops;
     dev->parent.eth_rx = _receive;

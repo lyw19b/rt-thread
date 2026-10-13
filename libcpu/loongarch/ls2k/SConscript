@@ -1,0 +1,6 @@
+from building import *
+
+cwd = GetCurrentDir()
+group = DefineGroup('LS2K', [], depend=[''], CPPPATH=[cwd])
+group += SConscript('gmac/SConscript')
+Return('group')

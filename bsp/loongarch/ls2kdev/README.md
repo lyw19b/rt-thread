@@ -35,9 +35,10 @@ PHY 使用 Clause 22 MDIO，支持自动协商和链路轮询。驱动保留固�
 
 ## 实现边界
 
-- `drivers/net/gmac.h`：寄存器和描述符定义、核心接口。
-- `drivers/net/gmac.c`：MDIO、PHY、MAC 初始化、描述符所有权和环索引，不依赖 lwIP。
-- `drivers/net/drv_gmac.c`：RT-Thread 设备注册、pbuf 转换、同步、中断通知、链路检查和总线错误恢复。
+- `libcpu/loongarch/ls2k/gmac/gmac.h`：寄存器和描述符定义、核心接口。
+- `libcpu/loongarch/ls2k/gmac/gmac.c`：MDIO、PHY、MAC 初始化、描述符所有权和环索引，不依赖 lwIP。
+- `libcpu/loongarch/ls2k/gmac/drv_gmac.c`：RT-Thread 设备注册、pbuf 转换、同步、中断通知、链路检查和总线错误恢复。
+- `drivers/drv_gmac_platform.c`：板级 GMAC 资源获取与 DMA 地址范围。
 - `drivers/drv_pci.c` / `drv_interrupt.c`：BAR 检查、PCI 命令和 LIOINTC 路由、屏蔽。
 
 DMA 使用链接脚本保留的 `.gmac_dma` 区域。它不属于 `.bss` 清零区或堆，也不由 ELF 加载段初始化；驱动只通过非缓存别名访问它。描述符和数据的物理地址必须处于 32 位 DMA 窗口。写入描述符字段和帧数据后，先执行屏障，再交出 OWN；接收时先取得所有权，再读取帧。

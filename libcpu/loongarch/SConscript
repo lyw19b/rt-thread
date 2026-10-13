@@ -12,6 +12,9 @@ list  = os.listdir(cwd)
 # add common code files
 group = group + SConscript(os.path.join('common', 'SConscript'))
 
+if GetDepend('SOC_LS2K1000LA') or GetDepend('SOC_LS2K0300'):
+    group += SConscript(os.path.join('ls2k', 'SConscript'))
+
 # # cpu porting code files
 # if rtconfig.CPU != 'common':
 #     group = group + SConscript(os.path.join(rtconfig.CPU, 'SConscript'))
