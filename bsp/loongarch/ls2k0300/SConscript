@@ -1,0 +1,6 @@
+from building import *
+
+group = []
+group += SConscript('drivers/SConscript')
+group += SConscript('applications/SConscript')
+Return('group')

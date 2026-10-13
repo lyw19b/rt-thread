@@ -1,7 +1,8 @@
 menuconfig BSP_USING_GMAC
     bool "LS2K Ethernet"
     depends on RT_USING_LWIP && !LWIP_NO_RX_THREAD
-    depends on !RT_USING_NANO && !RT_USING_SMART
+    depends on !RT_USING_NANO
+    depends on !RT_USING_SMART || SOC_LS2K0300
     select RT_USING_DEVICE_OPS
     select RT_USING_MUTEX
     default n

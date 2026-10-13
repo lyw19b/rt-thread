@@ -132,8 +132,12 @@ rt_inline void rt_hw_tlb_invalidate_all_local(void)
 }
 
 rt_inline void rt_hw_tlb_invalidate_range(rt_aspace_t aspace, void *start,
-                                              size_t size, size_t stride)
+                                        size_t size, size_t stride)
 {
+    RT_UNUSED(aspace);
+    RT_UNUSED(start);
+    RT_UNUSED(size);
+    RT_UNUSED(stride);
     __asm__ volatile("invtlb 0x0, $zero, $zero" ::: "memory");
 }
 

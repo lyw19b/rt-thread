@@ -1,0 +1,7 @@
+from building import *
+
+# rtatomic.h returns C11 atomic typedefs; GCC warns about their qualifiers.
+cwd = GetCurrentDir()
+group = DefineGroup('LS2K0300 board', Glob('*.c'), depend=[''], CPPPATH=[cwd],
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+Return('group')

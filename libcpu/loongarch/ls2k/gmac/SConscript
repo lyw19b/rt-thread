@@ -1,9 +1,10 @@
 from building import *
 
+# rtatomic.h returns C11 atomic typedefs; GCC warns about their qualifiers.
 cwd = GetCurrentDir()
 src = []
 if GetDepend('BSP_USING_GMAC0') or GetDepend('BSP_USING_GMAC1'):
     src = ['gmac.c', 'drv_gmac.c']
 group = DefineGroup('LS2K GMAC', src, depend=['BSP_USING_GMAC'], CPPPATH=[cwd],
-                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror'])
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
 Return('group')

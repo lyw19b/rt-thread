@@ -123,7 +123,8 @@ static int _phy_init(struct ls2k_gmac *mac, int address)
 
 static int _ring_valid(const struct ls2k_gmac_ring *ring)
 {
-    return ring->desc && ring->buffers && ring->count >= 2 && ring->count <= 256 &&
+    /* LS2K0300 requires at least three descriptors before enabling DMA. */
+    return ring->desc && ring->buffers && ring->count >= 3 && ring->count <= 256 &&
            !(ring->desc_dma & 15) && !(ring->buffers_dma & 15) &&
            (uint64_t)ring->desc_dma + ring->count * sizeof(*ring->desc) <= (1ULL << 32) &&
            (uint64_t)ring->buffers_dma + ring->count * GMAC_BUFFER_SIZE <= (1ULL << 32);

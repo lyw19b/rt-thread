@@ -1,0 +1,3 @@
+# Keep SCons paths relative to this BSP while sharing the build setup.
+with open('../common/build.py') as source:
+    exec(compile(source.read(), '../common/build.py', 'exec'))

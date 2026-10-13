@@ -1,4 +1,4 @@
-# LS2K1000LA
+# LS2K1000LA 与 LS2K0300
 
 本 BSP 面向 LoongArch 版龙芯 2K1000LA，使用单核 RT-Thread 标准版。板级地址和外设连接参考 `rt-thread-2k1000/bsp/loongarch/ls2kdev`，网络驱动已重新组织实现。Nano、Smart 的 QEMU 配置仍在 `bsp/qemu-virt64-loongarch`；本板尚未实现 Smart 地址空间初始化。
 
@@ -39,7 +39,10 @@ PHY 使用 Clause 22 MDIO，支持自动协商和链路轮询。驱动保留固�
 - `libcpu/loongarch/ls2k/gmac/gmac.c`：MDIO、PHY、MAC 初始化、描述符所有权和环索引，不依赖 lwIP。
 - `libcpu/loongarch/ls2k/gmac/drv_gmac.c`：RT-Thread 设备注册、pbuf 转换、同步、中断通知、链路检查和总线错误恢复。
 - `drivers/drv_gmac_platform.c`：板级 GMAC 资源获取与 DMA 地址范围。
-- `drivers/drv_pci.c` / `drv_interrupt.c`：BAR 检查、PCI 命令和 LIOINTC 路由、屏蔽。
+- `drivers/drv_pci.c`：2K1000LA 的 BAR 检查和 PCI 命令。
+- `libcpu/loongarch/ls2k/drv_interrupt.c`：两款芯片共用的传统 LIOINTC 驱动，包含边沿确认、屏蔽和分发。
+- `libcpu/loongarch/ls2k/drv_uart.c`：共用串口驱动，Nano 使用轮询，标准版和 Smart 使用 serial v1；共用 IRQ 时逐个检查已注册串口。
+- `bsp/loongarch/common`：共用构建入口、工具链参数、内核 libc 映射和链接段布局；各 BSP 仅保留加载地址、次核栈大小和镜像名称。
 
 DMA 使用链接脚本保留的 `.gmac_dma` 区域。它不属于 `.bss` 清零区或堆，也不由 ELF 加载段初始化；驱动只通过非缓存别名访问它。描述符和数据的物理地址必须处于 32 位 DMA 窗口。写入描述符字段和帧数据后，先执行屏障，再交出 OWN；接收时先取得所有权，再读取帧。
 
@@ -86,3 +89,43 @@ python3 examples/test/ls2k_gmac_test.py --peer 192.168.1.20 --frames 10000 --win
 2026-10-14，使用 GCC 15.2.0 完成上述五种配置的交叉构建，无编译告警；宿主测试在 AddressSanitizer/UndefinedBehaviorSanitizer 下通过，两端口模型各完成 100,000 帧校验。UDP 校验客户端另通过本机回显 10,000 帧测试，该结果不代表板卡收发性能。
 
 当前尚未进行实板收发验证。现有主线 LoongArch QEMU 只有 `virt` 机型，不能代替 LS2K1000LA GMAC 验证。AHCI 可选驱动沿用上一阶段迁入版本，不属于此次网络重构范围。
+
+## LS2K0300
+
+代码位于 `bsp/loongarch/ls2k0300`。芯片参数依据龙芯官网的
+[《龙芯 2K0300 处理器用户手册》V1.1（2026-08）](https://www.loongson.cn/uploads/images/2026081120140475319.%E9%BE%99%E8%8A%AF2K0300%E5%A4%84%E7%90%86%E5%99%A8%E7%94%A8%E6%88%B7%E6%89%8B%E5%86%8C_V1.1.pdf)，
+主要核对第 2 章、3.2、3.4、3.5、5 和 14 章。手册与下载文件不存入代码仓库。
+
+| 项目 | LS2K1000LA | LS2K0300 |
+| --- | --- | --- |
+| CPU 移植 | 共用 LoongArch64 / LP64D，单启动核 | 共用 LoongArch64 / LP64D，单核 |
+| UART0 / 步长 | `0x1fe20000` / `0x100` | `0x16100000` / `0x400` |
+| 传统中断控制器 | `0x1fe01400`，路由值 `0x11` | `0x16001400`，路由值 `0x10`，低 4 位保留 |
+| GMAC 资源 | 读取固件 PCI BAR | 固定 MMIO `0x16020000` / `0x16030000` |
+| GMAC IRQ | 12 / 14 | 49 / 50（传统中断） |
+| 内核加载地址 | `0x9000000098000000` | `0x9000000000200000` |
+
+2K0300 使用传统中断，关闭固件可能留下的扩展中断通路；不访问 2K1000LA 专有的 BOUNCE/AUTO 寄存器。Nano、标准版、Smart 共用启动、上下文、定时器和 CPU 异常代码，没有复制另一套 CPU 移植。
+
+```sh
+cd bsp/loongarch/ls2k0300
+export RTT_EXEC_PATH="$HOME/local/loongarch64-linux-musl-gcc-15.2.0/bin"
+cp smart_defconfig .config  # 也可选 nano、standard、network_defconfig
+scons --pyconfig-silent
+scons -j8
+```
+
+默认 `.config` 为标准版；`network_defconfig` 启用双 GMAC，Smart 也可在 menuconfig 中启用同一网络驱动。`smart_defconfig` 使用临时根文件系统，重启后数据丢失；尚未提供 SDIO/eMMC 存储驱动或完整 musl 用户态发行环境。系统调用沿用仓库官方表，不重新编号。
+
+`BSP_UART_INDEX` 选择控制台 UART0～9，设备名固定为 `uart`。默认 UART0，115200、8N1；实际调试口若接在其他 UART，需调整该选项。驱动读取采样模式、DDR PLL 和 APB 分频寄存器得到时钟；`BSP_UART_CLOCK_HZ` 非零时可明确覆盖输入频率。PLL、DDR 初始化、引脚复用、外部 PHY 复位及 RGMII 延迟由引导固件完成，驱动不会猜测板上连接或重写这些设置。
+
+内核放在低 DDR 的 2 MiB 处，链接区域限制为 16 MiB，堆从 `_end` 到 32 MiB。Smart 页分配区为 32 MiB～`BSP_RAM_END`，默认上界 128 MiB；应按实际可用内存和固件保留区调整。上界最多 `0x0ff00000`，避开可能仍打开的 DDR 控制器寄存器窗口。GMAC DMA 存储仍在 `.gmac_dma` 中，只接受低 256 MiB DDR 的地址，并为对应端口选择非缓存 DDR 通路；不把 CPU 高 DDR 别名直接当成 DMA 地址。
+
+`BSP_USING_SELFTEST` 提供 `port_test`、`port_resources` 等回归入口；网络压力测试继续使用上文同一套 `gmac_echo` 和主机脚本。自动检查命令：
+
+```sh
+python3 examples/test/ls2k_platform_test.py
+python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 --output /tmp/ls2k0300-test
+```
+
+2K0300 构建矩阵覆盖五种基础/网络组合以及 Nano、Smart、UART9 和 Smart 双网口。寄存器模型检查时钟计算、中断路由/确认/屏蔽、串口 DLAB 互斥和 DMA 通路；模型不能验证电气时序。现有 QEMU `virt` 不模拟 2K0300 外设，实板启动、串口时钟、PHY 协商与持续收发仍需硬件验收。当前没有板级复位/关机实现，使用板上复位键或引导固件。
