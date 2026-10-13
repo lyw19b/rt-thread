@@ -128,6 +128,7 @@
 
 /* RT-Thread LoongArch CPU */
 
+#define RT_USING_FPU
 /* end of RT-Thread LoongArch CPU */
 
 /* RT-Thread Components */

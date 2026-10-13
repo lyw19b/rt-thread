@@ -47,3 +47,15 @@ python3 examples/test/loongarch_qemu_test.py --mode all --parallel \
 - Smart：重复执行 fork/CoW 和进程创建/退出，核对每轮后的堆用量与空闲页数。每批 32 次 fork 暂停 20 ms，让低优先级 `tsystem` 完成延迟回收；持续占满 CPU 会使该线程饥饿，不能把 `waitpid` 返回视为内存已经回收。
 
 `loongarch_user_test.c` 是使用官方 Smart ABI 的独立测试程序，用现有 Linux musl 工具链的头文件和汇编器构建，不链接 Linux 用户态 libc。它验证内核 ABI，不能替代对完整 Smart musl、动态链接器和第三方应用的测试。本 BSP 当前验证范围为单核、LP64D、4 KiB 页和 RAM FAT 根文件系统；LSX/LASX、SMP、主线 QEMU VirtIO PCI 网络/磁盘不在此范围内。
+
+## 验证记录
+
+2026-10-14，使用 LoongArch64 musl GCC 15.2.0、QEMU 10.1.2，按上述命令运行：
+
+| 配置 | 官方测试 | 内核压力测试 | 用户态压力测试 |
+| --- | --- | --- | --- |
+| Nano | 19/19 | 3 轮，每线程 20,000 次 | 不适用 |
+| 标准版 | 19/19 | 3 轮，每线程 20,000 次 | 不适用 |
+| Smart | 32/32 | 3 轮，每线程 20,000 次 | 3 × 1,024 次 fork/CoW |
+
+三个配置均通过 180 秒定时器压力测试。每轮内核压力测试前后堆用量一致；Smart 用户态压力测试前后均为堆占用 92,896 字节、空闲页 31,603/31,690。该记录对应上文列出的测试范围，不包含完整 Smart libc 或动态链接应用。
