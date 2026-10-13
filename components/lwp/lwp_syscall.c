@@ -3957,6 +3957,9 @@ sysret_t sys_execve(const char *path, char * const argv[], char * const envp[])
         lwp_aspace_switch(thread);
 
         lwp_ref_dec(new_lwp);
+        /* The new image owns its argument copy; this path never reaches quit. */
+        rt_free(kpath);
+        lwp_args_detach(&args_info);
         arch_start_umode(lwp->args,
                          lwp->text_entry,
                          (void *)USER_STACK_VEND,
