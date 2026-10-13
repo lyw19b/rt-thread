@@ -4,7 +4,7 @@ from building import *
 group = []
 cwd = GetCurrentDir()
 
-if GetDepend('ARCH_ARM_CORTEX_A') or GetDepend('ARCH_ARMV8') or GetDepend('ARCH_RISCV64'):
+if GetDepend('ARCH_ARM_CORTEX_A') or GetDepend('ARCH_ARMV8') or GetDepend('ARCH_RISCV64') or GetDepend('ARCH_LOONGARCH64'):
     src = Glob('*.c') + Glob('*_gcc.S')
     SrcRemove(src, ['ioremap-nommu.c'])
     if not GetDepend('RT_USING_MEMBLOCK'):

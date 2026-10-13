@@ -50,6 +50,9 @@
 #ifdef RT_USING_SMART
 #define VIRTIO_VA2PA(vaddr)         ((rt_ubase_t)rt_kmem_v2p(vaddr))
 #define VIRTIO_PA2VA(paddr)         ((rt_ubase_t)rt_ioremap((void *)paddr, ARCH_PAGE_SIZE))
+#elif defined(ARCH_LOONGARCH64)
+#define VIRTIO_VA2PA(vaddr)         ((rt_ubase_t)(vaddr) & 0x0000ffffffffffffUL)
+#define VIRTIO_PA2VA(paddr)         ((rt_ubase_t)(paddr) | 0x9000000000000000UL)
 #else
 #define VIRTIO_VA2PA(vaddr)         ((rt_ubase_t)vaddr)
 #define VIRTIO_PA2VA(paddr)         ((rt_ubase_t)paddr)

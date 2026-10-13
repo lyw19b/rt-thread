@@ -1,0 +1,18 @@
+menu "RT-Thread LoongArch CPU"
+
+    config RT_USING_FPU
+        bool "Using Float Point Unit"
+        default n
+        help
+            Using Float Point Unit in code.
+
+    config LOONGARCH_HARDWARE_PTW
+        bool "Using LOONGARCH Hardware Page Table Walk"
+        default n
+
+    config LOONGARCH_SOFTWARE_PTW
+        bool "Using LOONGARCH Software Page Table Walk"
+        default n
+        depends on (!LOONGARCH_HARDWARE_PTW)
+
+endmenu

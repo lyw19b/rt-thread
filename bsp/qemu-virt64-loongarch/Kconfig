@@ -1,0 +1,52 @@
+mainmenu "RT-Thread Project Configuration"
+
+BSP_DIR := .
+
+RTT_DIR := ../../
+
+PKGS_DIR := packages
+
+source "$(RTT_DIR)/Kconfig"
+osource "$PKGS_DIR/Kconfig"
+rsource "driver/Kconfig"
+
+config BOARD_QEMU_VIRT_LOONGARCH64
+    bool
+    select ARCH_LOONGARCH64
+    select RT_USING_COMPONENTS_INIT
+    select RT_USING_USER_MAIN
+    select RT_USING_CACHE
+    select ARCH_MM_MMU if RT_USING_SMART
+    select ARCH_REMAP_KERNEL if RT_USING_SMART
+    default y
+
+config ENABLE_FPU
+    bool "Enable FPU"
+    select ARCH_LOONGARCH_FPU
+    default y
+
+config ENABLE_FPU_SIMD
+    bool "Using LOONGARCH SIMD"
+    select ARCH_LOONGARCH_SIMD
+    default n
+
+if ENABLE_FPU_SIMD
+    choice
+    prompt "Enable LoongArch SIMD Extension"
+    default ARCH_SIMD_LSX
+
+    config ARCH_SIMD_LSX
+        bool "128"
+
+    config ARCH_SIMD_LASX
+        bool "256"
+    endchoice
+endif
+
+config __STACKSIZE__
+    int "stack size for interrupt"
+    default 4096
+
+config BSP_USING_SELFTEST
+    bool "Build kernel port regression tests"
+    default n

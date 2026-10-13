@@ -1093,6 +1093,10 @@ static void _signal_action_flag_u2k(int signo, struct lwp_signal *signal, const 
             _sigaddset(&signal->sig_action_nocldwait, signo);
     }
 
+    /* Some ABIs, including LoongArch, do not expose a restorer flag. */
+#ifndef SA_RESTORER
+#define SA_RESTORER 0
+#endif
     #define _HANDLE_FLAGS (SA_RESTORER | SA_NODEFER | SA_ONSTACK | SA_RESTART | SA_SIGINFO | SA_NOCLDSTOP | SA_NOCLDWAIT)
     if (flags & ~_HANDLE_FLAGS)
         LOG_W("Unhandled flags: 0x%lx", flags & ~_HANDLE_FLAGS);

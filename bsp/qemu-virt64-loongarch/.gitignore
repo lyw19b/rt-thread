@@ -1,0 +1,7 @@
+/compile_commands.json
+/link_stacksize.lds
+/kernel.specs.bak
+/sd.img
+/sd.bin
+/rtthread.asm
+/.config.old
