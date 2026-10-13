@@ -9,7 +9,6 @@
  */
 
 #include <rtthread.h>
-#include <rtdevice.h>
 #include "utest.h"
 
 #define THREAD_STACK_SIZE    1024
