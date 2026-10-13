@@ -14,15 +14,8 @@
 #include "asm-offsets.h"
 
 START_POINT(_rt_thread_entry)
-    LONG_LD    ra, sp, PT_R14		/* thread exit */
-    LONG_LD    a0, sp, PT_R13       /* parameter */
-    LONG_LD    s0, sp, PT_R12       /* tentry */
-    move       s1, ra
-    /* jump to thread entry */
+    /* The initial switch frame carries entry, argument and exit in s0-s2. */
+    move       a0, s1
     jirl       ra, s0, 0
-    /* run thread exit routine */
-    jirl       zero, s1, 0
-
-1:  /* never here */
-	b          1b
+    jirl       zero, s2, 0
 START_POINT_END(_rt_thread_entry)

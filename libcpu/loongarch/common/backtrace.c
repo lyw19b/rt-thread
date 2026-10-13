@@ -79,7 +79,7 @@ rt_err_t rt_hw_backtrace_frame_unwind(rt_thread_t thread, struct rt_hw_backtrace
     rt_err_t rc = -RT_ERROR;
     rt_uintptr_t *fp = (rt_uintptr_t *)frame->fp;
 
-    if (fp && !((long)fp & 0x7))
+    if (thread && fp && !((long)fp & 0x7))
     {
 #ifdef RT_USING_SMART
         if (thread->lwp)

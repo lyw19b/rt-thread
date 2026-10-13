@@ -22,7 +22,7 @@
 
 .macro  build_prep_fcsr
 #ifdef RT_USING_FPU
-    movfcsr2gr  a1, fcsr0
+    movfcsr2gr  a1, $fcsr0
 #endif
 .endm
 

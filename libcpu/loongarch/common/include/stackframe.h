@@ -13,14 +13,12 @@
 #ifndef __ASM_STACKFRAME_H__
 #define __ASM_STACKFRAME_H__
 
+#include <rtconfig.h>
 #include "asm-generic.h"
 #include "regdef.h"
 #include "asm-offsets.h"
 #include "loongarch.h"
 
-#ifdef RT_USING_FPU
-#include "fpregdef.h"
-#endif
 
 
 #ifdef __ASSEMBLY__
@@ -75,6 +73,8 @@
 	addi.d  sp, sp, -PT_SIZE
 	LONG_ST	t0, sp, PT_R3
 	LONG_ST	zero, sp, PT_R0
+    LONG_ST zero, sp, PT_RESERVED
+    LONG_ST zero, sp, PT_BVADDR
 	csrrd	t0, LOONGARCH_CSR_PRMD
 	LONG_ST	t0, sp, PT_PRMD
 	csrrd	t0, LOONGARCH_CSR_CRMD
@@ -344,39 +344,16 @@
     movgr2cf $fcc7, t0
 .endm
 
+/* C calls preserve f24-f31. Exceptions separately save all 32 FPRs. */
 .macro save_switch_fpu
-    fst.d $f0, sp, 144
-    fst.d $f1, sp, 152
-    fst.d $f2, sp, 160
-    fst.d $f3, sp, 168
-    fst.d $f4, sp, 176
-    fst.d $f5, sp, 184
-    fst.d $f6, sp, 192
-    fst.d $f7, sp, 200
-    fst.d $f8, sp, 208
-    fst.d $f9, sp, 216
-    fst.d $f10, sp, 224
-    fst.d $f11, sp, 232
-    fst.d $f12, sp, 240
-    fst.d $f13, sp, 248
-    fst.d $f14, sp, 256
-    fst.d $f15, sp, 264
-    fst.d $f16, sp, 272
-    fst.d $f17, sp, 280
-    fst.d $f18, sp, 288
-    fst.d $f19, sp, 296
-    fst.d $f20, sp, 304
-    fst.d $f21, sp, 312
-    fst.d $f22, sp, 320
-    fst.d $f23, sp, 328
-    fst.d $f24, sp, 336
-    fst.d $f25, sp, 344
-    fst.d $f26, sp, 352
-    fst.d $f27, sp, 360
-    fst.d $f28, sp, 368
-    fst.d $f29, sp, 376
-    fst.d $f30, sp, 384
-    fst.d $f31, sp, 392
+    fst.d $f24, sp, RT_THREAD_FPR24 + 0 * LONGSIZE
+    fst.d $f25, sp, RT_THREAD_FPR24 + 1 * LONGSIZE
+    fst.d $f26, sp, RT_THREAD_FPR24 + 2 * LONGSIZE
+    fst.d $f27, sp, RT_THREAD_FPR24 + 3 * LONGSIZE
+    fst.d $f28, sp, RT_THREAD_FPR24 + 4 * LONGSIZE
+    fst.d $f29, sp, RT_THREAD_FPR24 + 5 * LONGSIZE
+    fst.d $f30, sp, RT_THREAD_FPR24 + 6 * LONGSIZE
+    fst.d $f31, sp, RT_THREAD_FPR24 + 7 * LONGSIZE
     movfcsr2gr t0, $fcsr0
     st.d t0, sp, 120
     movcf2gr t0, $fcc0
@@ -398,38 +375,14 @@
 .endm
 
 .macro restore_switch_fpu
-    fld.d $f0, sp, 144
-    fld.d $f1, sp, 152
-    fld.d $f2, sp, 160
-    fld.d $f3, sp, 168
-    fld.d $f4, sp, 176
-    fld.d $f5, sp, 184
-    fld.d $f6, sp, 192
-    fld.d $f7, sp, 200
-    fld.d $f8, sp, 208
-    fld.d $f9, sp, 216
-    fld.d $f10, sp, 224
-    fld.d $f11, sp, 232
-    fld.d $f12, sp, 240
-    fld.d $f13, sp, 248
-    fld.d $f14, sp, 256
-    fld.d $f15, sp, 264
-    fld.d $f16, sp, 272
-    fld.d $f17, sp, 280
-    fld.d $f18, sp, 288
-    fld.d $f19, sp, 296
-    fld.d $f20, sp, 304
-    fld.d $f21, sp, 312
-    fld.d $f22, sp, 320
-    fld.d $f23, sp, 328
-    fld.d $f24, sp, 336
-    fld.d $f25, sp, 344
-    fld.d $f26, sp, 352
-    fld.d $f27, sp, 360
-    fld.d $f28, sp, 368
-    fld.d $f29, sp, 376
-    fld.d $f30, sp, 384
-    fld.d $f31, sp, 392
+    fld.d $f24, sp, RT_THREAD_FPR24 + 0 * LONGSIZE
+    fld.d $f25, sp, RT_THREAD_FPR24 + 1 * LONGSIZE
+    fld.d $f26, sp, RT_THREAD_FPR24 + 2 * LONGSIZE
+    fld.d $f27, sp, RT_THREAD_FPR24 + 3 * LONGSIZE
+    fld.d $f28, sp, RT_THREAD_FPR24 + 4 * LONGSIZE
+    fld.d $f29, sp, RT_THREAD_FPR24 + 5 * LONGSIZE
+    fld.d $f30, sp, RT_THREAD_FPR24 + 6 * LONGSIZE
+    fld.d $f31, sp, RT_THREAD_FPR24 + 7 * LONGSIZE
     ld.d t0, sp, 120
     movgr2fcsr $fcsr0, t0
     ld.bu t0, sp, 128

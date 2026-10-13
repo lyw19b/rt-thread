@@ -35,7 +35,7 @@ typedef struct rt_hw_switch_frame
     rt_ubase_t r_fcsr;
     rt_ubase_t r_fcc;
     rt_ubase_t reserved;
-    rt_ubase_t f[32];
+    rt_ubase_t f[8]; /* ABI callee-saved f24-f31 */
 } *rt_hw_switch_frame_t;
 
 
@@ -81,7 +81,7 @@ struct pt_regs
     rt_ubase_t r_era;        /* (r36)          csr era                    */
     rt_ubase_t r_bvaddr;     /* (r37)          csr bvaddr                 */
     rt_ubase_t r_ecfg;       /* (r38)          csr ecfg                   */
-    rt_ubase_t r_u_stack;    /* (r39)          user statck for SMART      */
+    rt_ubase_t reserved;     /* (r39)          keep the FPU frame aligned */
     rt_ubase_t f[32];      /* f0~f31 */
     rt_ubase_t fcsr;
     rt_ubase_t fcc;

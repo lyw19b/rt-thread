@@ -13,7 +13,6 @@
 #define _ASM_MMU_H
 
 
-// #ifdef RT_USING_SMART
 #include <mm_aspace.h>
 #include <mm_page.h>
 
@@ -26,7 +25,6 @@ struct mem_desc
     struct rt_varea varea;
 };
 
-// #endif
 
 /* RAM, Flash, or ROM */
 #define NORMAL_MEM 0
@@ -53,8 +51,6 @@ struct mem_desc
 #define MMU_PG_LEVEL_2_SHIFT     (MMU_PG_LEVEL_3_SHIFT - ARCH_PAGE_LEVEL_SHIFT)
 #define MMU_PG_LEVEL_1_SHIFT     (MMU_PG_LEVEL_2_SHIFT - ARCH_PAGE_LEVEL_SHIFT)
 
-// #define ARCH_PAGE_PA_MASK(x) (x & 0x0000ffffffffffffUL)
-// #define ARCH_PAGE_VA_MASK(x) (x | 0x9000000000000000UL)
 
 #define ARCH_PAGE_PA_MASK(x) ((rt_ubase_t)(x) & ARCH_PAGE_ADDRESS_MASK)
 #define ARCH_PAGE_VA_MASK(x) ((rt_ubase_t)(x) | 0x9000000000000000UL)
@@ -73,6 +69,7 @@ struct mem_desc
 
 #define PHYSICAL_ADDRESS_WIDTH_BITS 56
 
+/* Page metadata covers the low 4 GiB RAM window, not the 39-bit user VA. */
 #define ARCH_VADDR_WIDTH 32
 
 
@@ -118,10 +115,10 @@ struct mem_desc
 
 #define MMU_MAP_K_DEVICE   (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_SUC)
 #define MMU_MAP_K_RWCB     (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC)
-#define MMU_MAP_K_RW       (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC)
+#define MMU_MAP_K_RW       (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_SUC)
 #define MMU_MAP_U_RWCB     (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC)
 #define MMU_MAP_U_RWCB_XN  (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC | MMU_PAGE_NO_EXEC)
-#define MMU_MAP_U_RW       (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC)
+#define MMU_MAP_U_RW       (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_SUC)
 #define MMU_MAP_EARLY      (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC)
 
 #define MMU_DEFAULT_USER_ATTR  MMU_MAP_U_RWCB

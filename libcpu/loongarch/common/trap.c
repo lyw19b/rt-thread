@@ -180,85 +180,52 @@ void *exception_table[EXCCODE_INT_START] = {
 };
 
 
+static void fatal_exception(struct pt_regs *regs, const char *reason)
+{
+    rt_kprintf("%s: pc=%p address=%p\n", reason,
+               (void *)regs->r_era, (void *)regs->r_bvaddr);
+#ifdef RT_USING_SMART
+    /* A user fault must not stop other processes or the kernel. */
+    if (regs->r_prmd & 3)
+        sys_exit_group(-1);
+#endif
+    rt_hw_interrupt_disable();
+    while (1) {}
+}
+
 void do_ade(struct pt_regs *regs)
 {
-    rt_kprintf("UN-handled do_ade exception occurred!!!\n");
-    rt_kprintf("Ra :\n");
-    rt_kprintf("    0x%lx\n", regs->r_ra);
-    rt_kprintf("Era:\n");
-    rt_kprintf("    0x%lx\n", regs->r_era);
-    rt_kprintf("EsubCode:\n");
-    rt_kprintf("    0x%lx\n", ((read_csr_estat() & CSR_ESTAT_ESUBCODE) >> CSR_ESTAT_ESUBCODE_SHIFT));
-    rt_kprintf("bvaddr: 0x%lx\n", regs->r_bvaddr);
-    while(1);
+    fatal_exception(regs, "Address error");
 }
 
 void do_ale(struct pt_regs *regs)
 {
-    rt_kprintf("UN-handled do_ale exception occurred!!!\n");
-    rt_kprintf("ra: 0x%lx\n", regs->r_ra);
-    rt_kprintf("era: 0x%lx\n", regs->r_era);
-    rt_kprintf("bvaddr: 0x%lx\n", regs->r_bvaddr);
-    while(1);
-    // emulate_load_store_insn(regs, regs->r_bvaddr, regs->r_era);
+    fatal_exception(regs, "Unaligned access");
 }
 
 void do_bce(struct pt_regs *regs)
 {
-    rt_kprintf("UN-handled do_bce exception occurred!!!\n");
-    rt_kprintf("Ra :\n");
-    rt_kprintf("    0x%lx\n", regs->r_ra);
-    rt_kprintf("Era:\n");
-    rt_kprintf("    0x%lx\n", regs->r_era);
-    while(1);
+    fatal_exception(regs, "Bounds check error");
 }
 
 void do_bp(struct pt_regs *regs)
 {
-    rt_uint64_t era = regs->r_era;
-    rt_uint32_t opcode = *(rt_uint32_t *)(era);
-    rt_uint32_t bcode = (opcode & 0x7fff);
-
-    rt_kprintf("era: %016lx, opcode: %08x\n", era, opcode);
-
-    switch (bcode)
-    {
-    case BRK_DIVZERO:
-        rt_kprintf("BRK_DIVZERO\n");
-        break;
-    default:
-        rt_kprintf("UN-handled do_bp exception occurred!!!\n");
-        break;
-    }
-
-    while(1);
+    fatal_exception(regs, "Breakpoint");
 }
 
 void do_fpe(struct pt_regs *regs)
 {
-    rt_kprintf("UN-handled do_fpe exception occurred!!!\n");
-    while(1);
+    fatal_exception(regs, "Floating-point exception");
 }
 
 void do_fpu(struct pt_regs *regs)
 {
-    rt_kprintf("UN-handled do_fpu exception occurred!!!\n");
-    while(1);
+    fatal_exception(regs, "Floating-point unit disabled");
 }
 
 void do_ri(struct pt_regs *regs)
 {
-    rt_uint64_t era = regs->r_era;
-    rt_uint32_t opcode = *(rt_uint32_t *)(era);
-    rt_uint32_t bcode = (opcode & 0x7fff);
-    rt_kprintf("era: %016lx, opcode: %08x\n", era, opcode);
-
-    rt_kprintf("UN-handled do_ri exception occurred!!!\n");
-    rt_kprintf(" Ra:\n");
-    rt_kprintf("    0x%lx\n", regs->r_ra);
-    rt_kprintf("Era:\n");
-    rt_kprintf("    0x%lx\n", regs->r_era);
-    while (1);
+    fatal_exception(regs, "Illegal or privileged instruction");
 }
 
 void do_rt_dispatch_trap(struct pt_regs *regs)
@@ -294,9 +261,6 @@ void do_rt_dispatch_trap(struct pt_regs *regs)
         rt_kprintf("---------- Enter Interrupt ----------\n");
         rt_kprintf("     Hardware Exception occurred: 0x%lx\n", estat);
 #endif
-        // fixme
-        // CSR_ESTAT_IS_HW is read-only
-        csr_xchg32(0x0, CSR_ESTAT_IS_HW, LOONGARCH_CSR_ESTAT);
         rt_interrupt_enter();
         platform_generic_irq();
         rt_interrupt_leave();
@@ -328,8 +292,11 @@ void do_page_fault(struct pt_regs *regs)
     case MMU_STAT_EXCODE_PIL:
         msg.fault_op = MM_FAULT_OP_READ;
         break;
-    case MMU_STAT_EXCODE_PIS:
     case MMU_STAT_EXCODE_PME:
+        msg.fault_type = MM_FAULT_TYPE_RWX_PERM;
+        msg.fault_op = MM_FAULT_OP_WRITE;
+        break;
+    case MMU_STAT_EXCODE_PIS:
         msg.fault_op = MM_FAULT_OP_WRITE;
         break;
     case MMU_STAT_EXCODE_PIF:

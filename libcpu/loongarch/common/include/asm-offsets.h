@@ -58,6 +58,7 @@
 #define PT_ERA     (36 * LONGSIZE)
 #define PT_BVADDR  (37 * LONGSIZE)
 #define PT_ECFG    (38 * LONGSIZE)
+#define PT_RESERVED (39 * LONGSIZE)
 
 #define PT_REG_END	(PT_ECFG + LONGSIZE)
 
@@ -85,8 +86,8 @@
 #define RT_THREAD_FCSR  (15 * LONGSIZE)
 #define RT_THREAD_FCC   (16 * LONGSIZE)
 
-#define RT_THREAD_FPR0  (18 * LONGSIZE)
-#define RT_THREAD_END   (50 * LONGSIZE)
+#define RT_THREAD_FPR24 (18 * LONGSIZE)
+#define RT_THREAD_END   (26 * LONGSIZE)
 
 #define PT_SWITCH_FRAME_SIZE RT_THREAD_END
 

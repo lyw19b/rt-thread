@@ -20,28 +20,11 @@ config BOARD_QEMU_VIRT_LOONGARCH64
     select ARCH_REMAP_KERNEL if RT_USING_SMART
     default y
 
+# LP64D context switching requires scalar floating-point registers.
 config ENABLE_FPU
-    bool "Enable FPU"
+    bool
     select ARCH_LOONGARCH_FPU
     default y
-
-config ENABLE_FPU_SIMD
-    bool "Using LOONGARCH SIMD"
-    select ARCH_LOONGARCH_SIMD
-    default n
-
-if ENABLE_FPU_SIMD
-    choice
-    prompt "Enable LoongArch SIMD Extension"
-    default ARCH_SIMD_LSX
-
-    config ARCH_SIMD_LSX
-        bool "128"
-
-    config ARCH_SIMD_LASX
-        bool "256"
-    endchoice
-endif
 
 config __STACKSIZE__
     int "stack size for interrupt"

@@ -2,28 +2,23 @@
  * Copyright (c) 2026, RT-Thread Development Team
  * SPDX-License-Identifier: Apache-2.0
  */
+#include <stddef.h>
 #include <rtthread.h>
-#include "loongarch.h"
+#include <rthw.h>
 #include <lwp_ipc.h>
 #include <lwp_syscall.h>
-#include <stddef.h>
-
-
-#include <rthw.h>
-#include <rtthread.h>
 #include <lwp_internal.h>
-#ifdef ARCH_MM_MMU
+#include <lwp_arch.h>
+#include <lwp_user_mm.h>
+#include "loongarch.h"
+#include "stack.h"
 
 #define DBG_TAG "lwp.arch"
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
 
-#include "stack.h"
-
-#include <lwp_arch.h>
-#include <lwp_user_mm.h>
-
-extern size_t MMUTable[];
+#ifdef ARCH_MM_MMU
+extern rt_ubase_t MMUTable[];
 
 
 
@@ -53,7 +48,7 @@ void *arch_get_user_sp(void)
 {
     /* user sp saved in interrupt context */
     rt_thread_t self = rt_thread_self();
-    rt_uint8_t *stack_top = (rt_uint8_t *)self->stack_addr + self->stack_size;
+    rt_ubase_t stack_top = RT_ALIGN_DOWN((rt_ubase_t)self->stack_addr + self->stack_size, 16);
     struct pt_regs *frame = (struct pt_regs *)(stack_top - sizeof(struct pt_regs));
 
     return (void *)frame->r_sp;
@@ -110,8 +105,6 @@ int arch_set_thread_context(void (*exit)(void), void *new_thread_stack,
     return 0;
 }
 
-
-#define ALGIN_BYTES (16)
 
 struct signal_ucontext
 {
@@ -225,4 +218,15 @@ int arch_backtrace_uthread(rt_thread_t thread)
             return -1;
     }
     return -1;
+}
+
+void *loongarch_prepare_thread_return(void *stack_top)
+{
+    extern rt_uint32_t lwp_thread_return[2];
+    void *sp = (void *)RT_ALIGN_DOWN((rt_ubase_t)stack_top - 16, 16);
+
+    if (lwp_put_to_user(sp, lwp_thread_return, sizeof(lwp_thread_return)) != sizeof(lwp_thread_return))
+        sys_exit_group(EXIT_FAILURE);
+    __asm__ volatile("dbar 0; ibar 0" ::: "memory");
+    return sp;
 }

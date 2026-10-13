@@ -8,12 +8,9 @@
  */
 
 #include <rtthread.h>
-#include <rthw.h>
-#include <string.h>
 
 int main(void)
 {
-    // rt_kprintf("Hello LoongArch64!\n");
-    rt_kprintf("\033[1m\033[32mHello LoongArch64!\033[0m\n");
+    rt_kprintf("Hello LoongArch64!\n");
     return 0;
 }

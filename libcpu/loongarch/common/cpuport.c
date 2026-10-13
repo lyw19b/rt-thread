@@ -43,3 +43,9 @@ void rt_hw_context_switch_interrupt(rt_ubase_t from, rt_ubase_t to, rt_thread_t 
     return;
 }
 #endif /* end of RT_USING_SMP */
+
+/* Only the boot CPU is brought online by this port. */
+int rt_hw_cpu_id(void)
+{
+    return 0;
+}

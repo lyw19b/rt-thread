@@ -48,7 +48,14 @@ void rt_dispatch_syscall(struct pt_regs *regs)
 #else
 void rt_dispatch_syscall(struct pt_regs *regs)
 {
+#ifdef RT_USING_DFS
+    extern rt_base_t loongarch_kernel_syscall(struct pt_regs *regs);
+    rt_hw_interrupt_enable(4);
+    regs->r_a0 = loongarch_kernel_syscall(regs);
+    rt_hw_interrupt_disable();
+#else
     regs->r_a0 = -RT_ENOSYS;
+#endif
     regs->r_era += 4;
 }
 #endif

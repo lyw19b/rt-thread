@@ -11,6 +11,11 @@
 #include <rtthread.h>
 
 #include "stack.h"
+#include <stddef.h>
+
+RT_STATIC_ASSERT(exception_frame_size, sizeof(struct pt_regs) == PT_SIZE);
+RT_STATIC_ASSERT(exception_fpu_offset, offsetof(struct pt_regs, f) == PT_FPR0);
+RT_STATIC_ASSERT(switch_fpu_offset, offsetof(struct rt_hw_switch_frame, f) == RT_THREAD_FPR24);
 
 /**
  * This function will initialize thread stack, we assuming
@@ -27,31 +32,17 @@
 
 rt_uint8_t *rt_hw_stack_init(void *tentry, void *parameter, rt_uint8_t *stack_addr, void *texit)
 {
-    rt_ubase_t *tsp;
-    struct pt_regs *pt;
-
-    /* Get stack aligned */
-    tsp = (rt_ubase_t *)RT_ALIGN_DOWN((rt_ubase_t)stack_addr, 16);
-    tsp = (void *)tsp - sizeof(struct pt_regs);
-    pt =  (struct pt_regs*)tsp;
-    rt_memset(pt, 0, sizeof(*pt));
-
-    pt->r_t0 = (rt_ubase_t)tentry;
-    pt->r_t1 = (rt_ubase_t)parameter;
-    pt->r_t2 = (rt_ubase_t)texit;
-
-    rt_hw_switch_frame_t frame = (rt_hw_switch_frame_t)
-        ((rt_ubase_t)tsp - sizeof(struct rt_hw_switch_frame));
-
-    RT_ASSERT(sizeof(struct rt_hw_switch_frame) == PT_SWITCH_FRAME_SIZE);
-
-    rt_memset(frame, 0, sizeof(struct rt_hw_switch_frame));
-
+    rt_ubase_t top = RT_ALIGN_DOWN((rt_ubase_t)stack_addr, 16);
+    rt_hw_switch_frame_t frame = (void *)(top - sizeof(*frame));
     extern void _rt_thread_entry(void);
 
+    RT_ASSERT(sizeof(*frame) == PT_SWITCH_FRAME_SIZE);
+    rt_memset(frame, 0, sizeof(*frame));
     frame->r_ra = (rt_ubase_t)_rt_thread_entry;
+    frame->r_s0 = (rt_ubase_t)tentry;
+    frame->r_s1 = (rt_ubase_t)parameter;
+    frame->r_s2 = (rt_ubase_t)texit;
     frame->r_prmd = DEFAULT_THREAD_PRMD;
     frame->r_crmd = DEFAULT_THREAD_CRMD;
-
     return (void *)frame;
 }

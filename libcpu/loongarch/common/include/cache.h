@@ -12,49 +12,54 @@
 
 #include <rtdef.h>
 
-/**
- * @brief These APIs may not be supported by a specified architecture
- * But we have to include to all the cases to be 'general purpose'
- */
-
+/* DMW1 and normal pages use coherent cached memory. Order data accesses
+ * before publishing page tables, DMA buffers, or newly generated code. */
 rt_always_inline void rt_hw_cpu_dcache_clean_local(void *addr, int size)
 {
     RT_UNUSED(addr);
     RT_UNUSED(size);
+    __asm__ volatile("dbar 0" ::: "memory");
 }
 
 rt_always_inline void rt_hw_cpu_dcache_invalidate_local(void *addr, int size)
 {
     RT_UNUSED(addr);
     RT_UNUSED(size);
+    __asm__ volatile("dbar 0" ::: "memory");
 }
 
 rt_always_inline void rt_hw_cpu_dcache_clean_and_invalidate_local(void *addr, int size)
 {
     RT_UNUSED(addr);
     RT_UNUSED(size);
+    __asm__ volatile("dbar 0" ::: "memory");
 }
 
 rt_always_inline void rt_hw_cpu_dcache_clean_all_local(void)
 {
+    __asm__ volatile("dbar 0" ::: "memory");
 }
 
 rt_always_inline void rt_hw_cpu_dcache_invalidate_all_local(void)
 {
+    __asm__ volatile("dbar 0" ::: "memory");
 }
 
 rt_always_inline void rt_hw_cpu_dcache_clean_and_invalidate_all_local(void)
 {
+    __asm__ volatile("dbar 0" ::: "memory");
 }
 
 rt_always_inline void rt_hw_cpu_icache_invalidate_local(void *addr, int size)
 {
     RT_UNUSED(addr);
     RT_UNUSED(size);
+    __asm__ volatile("dbar 0; ibar 0" ::: "memory");
 }
 
 rt_always_inline void rt_hw_cpu_icache_invalidate_all_local(void)
 {
+    __asm__ volatile("dbar 0; ibar 0" ::: "memory");
 }
 
 /**
@@ -75,7 +80,10 @@ rt_always_inline void rt_hw_cpu_icache_invalidate_all_local(void)
 #define rt_hw_icache_invalidate_all rt_hw_cpu_icache_invalidate_all
 
 /** instruction barrier */
-static inline void rt_hw_cpu_sync(void) {}
+static inline void rt_hw_cpu_sync(void)
+{
+    __asm__ volatile("dbar 0; ibar 0" ::: "memory");
+}
 
 /**
  * @brief local cpu icahce & dcache synchronization

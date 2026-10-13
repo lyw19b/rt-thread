@@ -52,7 +52,7 @@ static rt_bool_t table_empty(rt_ubase_t *table)
     return RT_TRUE;
 }
 
-static void unmap_page(rt_aspace_t aspace, rt_ubase_t va)
+static size_t unmap_page(rt_aspace_t aspace, rt_ubase_t va)
 {
     rt_ubase_t *root = aspace->page_table;
     rt_ubase_t *mid, *leaf;
@@ -60,11 +60,14 @@ static void unmap_page(rt_aspace_t aspace, rt_ubase_t va)
     unsigned int j = (va >> 21) & 511;
 
     if (!root[i])
-        return;
+        return (1UL << 30) - (va & ((1UL << 30) - 1));
     mid = table_from_entry(root[i]);
-    if (mid[j])
+    if (!mid[j])
+        return (1UL << 21) - (va & ((1UL << 21) - 1));
     {
         leaf = table_from_entry(mid[j]);
+        if (!leaf[(va >> 12) & 511])
+            return ARCH_PAGE_SIZE;
         leaf[(va >> 12) & 511] = 0;
         if (table_empty(leaf))
         {
@@ -79,6 +82,7 @@ static void unmap_page(rt_aspace_t aspace, rt_ubase_t va)
         rt_hw_tlb_invalidate_all_local();
         rt_pages_free(mid, 0);
     }
+    return ARCH_PAGE_SIZE;
 }
 
 void *rt_hw_mmu_map(rt_aspace_t aspace, void *vaddr, void *paddr,
@@ -94,11 +98,10 @@ void *rt_hw_mmu_map(rt_aspace_t aspace, void *vaddr, void *paddr,
     for (done = 0; done < size; done += ARCH_PAGE_SIZE)
     {
         rt_ubase_t *pte = walk(aspace, va + done, RT_TRUE);
-        if (!pte || *pte)
+        if (!pte)
         {
             /* Also release empty tables allocated for the failed page. */
-            if (!pte)
-                unmap_page(aspace, va + done);
+            unmap_page(aspace, va + done);
             while (done)
             {
                 done -= ARCH_PAGE_SIZE;
@@ -107,6 +110,7 @@ void *rt_hw_mmu_map(rt_aspace_t aspace, void *vaddr, void *paddr,
             MM_PGTBL_UNLOCK(aspace);
             return RT_NULL;
         }
+        /* The aspace layer may replace a leaf while expanding a mapping. */
         *pte = (pa + done) | attr;
         if (attr & MMU_PAGE_WRITE)
             *pte |= MMU_PAGE_DIRTY;
@@ -121,8 +125,9 @@ void rt_hw_mmu_unmap(rt_aspace_t aspace, void *vaddr, size_t size)
 {
     size_t offset;
     MM_PGTBL_LOCK(aspace);
-    for (offset = 0; offset < size; offset += ARCH_PAGE_SIZE)
-        unmap_page(aspace, (rt_ubase_t)vaddr + offset);
+    /* Large user reservations are sparse: skip absent page-table subtrees. */
+    for (offset = 0; offset < size;)
+        offset += unmap_page(aspace, (rt_ubase_t)vaddr + offset);
     rt_hw_tlb_invalidate_all_local();
     MM_PGTBL_UNLOCK(aspace);
 }

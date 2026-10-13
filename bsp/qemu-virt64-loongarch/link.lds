@@ -25,6 +25,11 @@ MEMORY
 }
 
 ENTRY(_start)
+PHDRS
+{
+    text PT_LOAD FLAGS(5);
+    data PT_LOAD FLAGS(6);
+}
 SECTIONS
 {
     . = 0x9000000000200000 ;
@@ -34,7 +39,7 @@ SECTIONS
     .start :
     {
         *(.start);
-    } > SRAM
+    } > SRAM :text
 
     . = ALIGN(8);
 
@@ -85,7 +90,7 @@ SECTIONS
     __text_end = .;
     __text_size = __text_end - __text_start;
 
-    .data :
+    .data ALIGN(4096) :
     {
         *(.data)
         *(.data.*)
@@ -98,7 +103,7 @@ SECTIONS
 
         *(.sdata)
         *(.sdata.*)
-    } > SRAM
+    } > SRAM :data
 
     . = ALIGN(8);
     .ctors :
@@ -117,7 +122,7 @@ SECTIONS
         PROVIDE(__dtors_end__ = .);
     } > SRAM
 
-    /* stack for dual core */
+    /* Boot stacks; only core 0 is started. */
     .stack :
     {
         . = ALIGN(64);
