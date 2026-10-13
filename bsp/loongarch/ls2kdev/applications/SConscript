@@ -1,9 +1,12 @@
 from building import *
 Import('RTT_ROOT')
 
+# Keep objects for different BSP configurations out of the shared source tree.
+VariantDir('port_tests', os.path.join(RTT_ROOT, 'examples/test'), duplicate=0)
+
 cwd = GetCurrentDir()
 src = Glob('*.c')
 if GetDepend('BSP_GMAC_USING_ECHO_TEST'):
-    src += [os.path.join(RTT_ROOT, 'examples/test/ls2k_gmac_echo.c')]
+    src += ['port_tests/ls2k_gmac_echo.c']
 group = DefineGroup('Applications', src, depend=[''])
 Return('group')

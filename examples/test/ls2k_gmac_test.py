@@ -79,6 +79,7 @@ def set_config(config, name, value):
 
 
 def build_tests(args, output):
+    BSP = ROOT / "bsp/loongarch" / args.bsp
     env = os.environ.copy()
     if not env.get("RTT_EXEC_PATH"):
         candidates = sorted((Path.home() / "local").glob("*/bin/loongarch64-linux-musl-gcc"))
@@ -95,10 +96,20 @@ def build_tests(args, output):
                             "RT_USING_LWIP221": "y", "RT_USING_LWIP_IPV6": "y"},
         "standard": {},
     }
+    if args.bsp == "ls2k0300":
+        variants.update({"nano": {}, "smart": {},
+                         "uart9": {"BSP_UART_INDEX": "9", "BSP_UART_CLOCK_HZ": "150000000"},
+                         "smart-network": {"RT_USING_SMART": "y", "LOONGARCH_SOFTWARE_PTW": "y",
+                                           "RT_USING_LWP_MEM_CONTIGUOUS": "n",
+                                           "RT_USING_DFS_TMPFS": "y",
+                                           "BSP_RAM_END": "0x4000000"}})
     original = (BSP / ".config").read_bytes()
     try:
         for name, options in variants.items():
-            config = (BSP / "standard_defconfig").read_text() if name == "standard" else network
+            base = name if name in ("nano", "smart", "standard") else "network"
+            if name == "uart9":
+                base = "standard"
+            config = (BSP / f"{base}_defconfig").read_text()
             for key, value in options.items():
                 config = set_config(config, key, value)
             (BSP / ".config").write_text(config)
@@ -106,6 +117,9 @@ def build_tests(args, output):
             with log_path.open("w") as log:
                 run(["scons", "--pyconfig-silent"], cwd=BSP, env=env, stdout=log, stderr=subprocess.STDOUT)
                 header = (BSP / "rtconfig.h").read_text()
+                if name in ("nano", "smart", "smart-network"):
+                    mode = "NANO" if name == "nano" else "SMART"
+                    assert f"#define RT_USING_{mode}\n" in header
                 for key, value in options.items():
                     found = re.search(rf"^#define {key}(?: (.*))?$", header, re.M)
                     if value == "n":
@@ -113,7 +127,7 @@ def build_tests(args, output):
                     else:
                         assert found and (value == "y" or found.group(1) == value), key
                 run(["scons", "-j8"], cwd=BSP, env=env, stdout=log, stderr=subprocess.STDOUT)
-            if name != "standard":
+            if "#define BSP_USING_GMAC\n" in header:
                 prefix = Path(env["RTT_EXEC_PATH"]) / env.get("RTT_CC_PREFIX", "loongarch64-linux-musl-")
                 segments = subprocess.check_output([str(prefix) + "readelf", "-lW", BSP / "rtthread.elf"], text=True)
                 assert ".gmac_dma" not in segments, "DMA section must not be zeroed by the ELF loader"
@@ -124,7 +138,8 @@ def build_tests(args, output):
                     if symbol in addresses:
                         assert addresses["__bss_end"] <= addresses[symbol] < addresses["_end"]
                         assert addresses[symbol] & 63 == 0
-                        assert addresses["_end"] & 0xffffffffffff <= 0x100000000
+                        limit = 0x10000000 if args.bsp == "ls2k0300" else 0x100000000
+                        assert addresses["_end"] & 0xffffffffffff <= limit
             # The driver must compile cleanly; retain the complete log on failure.
             if re.search(r"warning:|error:", log_path.read_text()):
                 raise RuntimeError(f"Compiler diagnostics: {log_path}")
@@ -176,7 +191,8 @@ def network_test(peer, frames, window):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
-    parser.add_argument("--build", action="store_true", help="also cross-build five BSP configurations")
+    parser.add_argument("--bsp", choices=("ls2kdev", "ls2k0300"), default="ls2kdev")
+    parser.add_argument("--build", action="store_true", help="also cross-build the selected BSP configuration matrix")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--peer", action="append", default=[], help="board IPv4 address running gmac_echo")
     parser.add_argument("--frames", type=int, default=10000)

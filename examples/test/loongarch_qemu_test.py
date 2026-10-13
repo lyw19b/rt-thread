@@ -127,7 +127,9 @@ def exercise(mode, args, kernel, disk, output):
             for repeat in range(args.repeats):
                 guest.kernel_test(args.iterations)
                 print(f"{mode}: kernel stress {repeat + 1}/{args.repeats}, {args.iterations} iterations/worker", flush=True)
-            guest.command("list_thread")
+            listing = guest.command("list thread")
+            if "command not found" in listing:
+                raise RuntimeError("Thread diagnostic command is unavailable")
         finally:
             guest.close()
 

@@ -1,10 +1,13 @@
 from building import *
 Import('RTT_ROOT')
 
+# Keep objects for different BSP configurations out of the shared source tree.
+VariantDir('port_tests', os.path.join(RTT_ROOT, 'examples/test'), duplicate=0)
+
 cwd     = GetCurrentDir()
 src = Glob('*.c') + Glob('*.cpp')
 if GetDepend('BSP_USING_SELFTEST'):
-    src += [os.path.join(RTT_ROOT, 'examples/test/loongarch_kernel_test.c')]
+    src += ['port_tests/loongarch_kernel_test.c']
 CPPPATH = [cwd]
 
 group = DefineGroup('Applications', src, depend = [''], CPPPATH = CPPPATH)

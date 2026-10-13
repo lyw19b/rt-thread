@@ -138,6 +138,12 @@ static void test_start_and_errors(void)
     setup(&m);
     m.mac.rx.count = 0;
     assert(ls2k_gmac_start(&m.mac, address, 3) == -EINVAL);
+    m.mac.rx.count = 2;
+    assert(ls2k_gmac_start(&m.mac, address, 3) == -EINVAL);
+    m.mac.rx.count = m.mac.tx.count = 3;
+    assert(ls2k_gmac_start(&m.mac, address, 3) == 0);
+    assert(m.rx[2].length & GMAC_RX_RING_END);
+    assert(m.tx[2].status & GMAC_TX_RING_END);
     puts("GMAC initialization, address bounds and timeout tests: PASS");
 }
 
