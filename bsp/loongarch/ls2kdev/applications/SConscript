@@ -1,10 +1,9 @@
 from building import *
+Import('RTT_ROOT')
 
 cwd = GetCurrentDir()
 src = Glob('*.c')
-
-# SrcRemove(src, 'mnt.c')
-
-group = DefineGroup('Applications', src, depend = [''])
-
+if GetDepend('BSP_GMAC_USING_ECHO_TEST'):
+    src += [os.path.join(RTT_ROOT, 'examples/test/ls2k_gmac_echo.c')]
+group = DefineGroup('Applications', src, depend=[''])
 Return('group')

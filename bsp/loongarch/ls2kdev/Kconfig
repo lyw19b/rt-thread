@@ -31,3 +31,66 @@ config RT_USING_UART4
     bool "Using RT_USING_UART4"
     default y
 endif
+
+menuconfig BSP_USING_GMAC
+    bool "LS2K1000LA Ethernet"
+    depends on RT_USING_LWIP && !LWIP_NO_RX_THREAD
+    depends on !RT_USING_NANO && !RT_USING_SMART
+    select RT_USING_DEVICE_OPS
+    select RT_USING_MUTEX
+    default n
+
+if BSP_USING_GMAC
+    config BSP_USING_GMAC0
+        bool "GMAC0 (e0)"
+        default y
+
+    config BSP_USING_GMAC1
+        bool "GMAC1 (e1)"
+        default n
+
+    config BSP_GMAC_USING_ECHO_TEST
+        bool "Build bounded UDP echo diagnostic (gmac_echo)"
+        depends on RT_USING_FINSH && SAL_USING_POSIX
+        default n
+
+    config RT_LWIP_ETH_PAD_SIZE
+        int "Ethernet header padding bytes"
+        range 0 2
+        default 0
+        help
+            Use 2 to align IP headers after the 14-byte Ethernet header.
+
+    config BSP_GMAC_RING_SIZE
+        int "Descriptors per RX/TX ring"
+        range 4 128
+        default 32
+
+    config BSP_GMAC_MDIO_CLOCK
+        int "MDIO clock selector (0..5)"
+        range 0 5
+        default 1
+        help
+            Selector 1 divides a 100-150 MHz CSR clock by 62.
+            Set this to match the GMAC CSR clock configured by firmware.
+
+    if BSP_USING_GMAC0
+        config BSP_GMAC0_PHY
+            int "GMAC0 PHY address (-1 scans the MDIO bus)"
+            range -1 31
+            default -1
+        config BSP_GMAC0_MAC
+            string "GMAC0 MAC address (empty uses firmware address)"
+            default ""
+    endif
+
+    if BSP_USING_GMAC1
+        config BSP_GMAC1_PHY
+            int "GMAC1 PHY address (-1 scans the MDIO bus)"
+            range -1 31
+            default -1
+        config BSP_GMAC1_MAC
+            string "GMAC1 MAC address (empty uses firmware address)"
+            default ""
+    endif
+endif
