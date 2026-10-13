@@ -830,19 +830,25 @@ rt_err_t af_unix_eth_device_init(struct eth_device * dev, const char *name)
 #ifndef LWIP_NO_RX_THREAD
 rt_err_t eth_device_ready(struct eth_device* dev)
 {
+    rt_base_t level;
+    rt_err_t result = -RT_ERROR;
+
+    level = rt_spin_lock_irqsave(&dev->spinlock);
     if (dev->netif)
     {
-        if(dev->rx_notice == RT_FALSE)
+        result = RT_EOK;
+        if (dev->rx_notice == RT_FALSE)
         {
             dev->rx_notice = RT_TRUE;
-            return rt_mb_send(&eth_rx_thread_mb, (rt_ubase_t)dev);
+            result = rt_mb_send(&eth_rx_thread_mb, (rt_ubase_t)dev);
+            /* A full mailbox did not queue a notification. Allow the driver
+             * to retry instead of leaving RX permanently marked pending. */
+            if (result != RT_EOK)
+                dev->rx_notice = RT_FALSE;
         }
-        else
-            return RT_EOK;
-        /* post message to Ethernet thread */
     }
-    else
-        return -RT_ERROR; /* netif is not initialized yet, just return. */
+    rt_spin_unlock_irqrestore(&dev->spinlock, level);
+    return result;
 }
 
 rt_err_t eth_device_linkchange(struct eth_device* dev, rt_bool_t up)
