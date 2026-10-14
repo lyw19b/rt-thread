@@ -24,6 +24,12 @@ unsigned long fw_arg1;
 unsigned long fw_arg2;
 
 #ifdef RT_USING_SMART
+/**
+ * @brief    Configure the local page-table walker for the shared three-level layout.
+ *
+ * @note     Runs on each CPU with local IRQs masked. Software refill explicitly
+ *           disables hardware PTW; the hardware mode requires CPUCFG2.PTW support.
+ */
 static void mmu_init(void)
 {
     unsigned long width = ARCH_PAGE_SHIFT - 3;
@@ -52,6 +58,12 @@ static void mmu_init(void)
 }
 #endif
 
+/**
+ * @brief    Initialize CPU-local exception handling and the Smart page-table walker.
+ *
+ * @note     Called from the boot and secondary entry paths before local IRQs are
+ *           enabled. The boot CPU installs the shared exception vector image first.
+ */
 void init_cpu_early(void)
 {
     trap_init();

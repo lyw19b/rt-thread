@@ -72,6 +72,18 @@ rt_inline rt_err_t _bt_uaddr(rt_lwp_t lwp, rt_ubase_t *fp, struct rt_hw_backtrac
 }
 #endif /* RT_USING_SMART */
 
+/**
+ * @brief    Advance a frame-pointer backtrace by one call frame.
+ *
+ * @note     The caller must keep the thread and its stack stable. Unwinding assumes
+ *           the LP64 frame-pointer layout: saved FP at fp[-2] and return PC at fp[-1].
+ *
+ * @param    thread is the thread whose stack or user address space is inspected.
+ *
+ * @param    frame is the current frame and receives the previous frame pointer and PC.
+ *
+ * @return   RT_EOK on success, or a negative error for an invalid or unreadable frame.
+ */
 rt_err_t rt_hw_backtrace_frame_unwind(rt_thread_t thread, struct rt_hw_backtrace_frame *frame)
 {
     rt_err_t rc = -RT_ERROR;
@@ -116,6 +128,17 @@ rt_err_t rt_hw_backtrace_frame_unwind(rt_thread_t thread, struct rt_hw_backtrace
     return rc;
 }
 
+/**
+ * @brief    Read the starting backtrace frame from a saved thread context.
+ *
+ * @note     The caller must keep the thread stopped while reading its saved stack.
+ *
+ * @param    thread is a thread with a valid saved switch frame.
+ *
+ * @param    frame is the output frame receiving the saved return PC and frame pointer.
+ *
+ * @return   RT_EOK on success, or -RT_EINVAL if either argument is RT_NULL.
+ */
 rt_err_t rt_hw_backtrace_frame_get(rt_thread_t thread, struct rt_hw_backtrace_frame *frame)
 {
     rt_err_t rc;

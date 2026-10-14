@@ -14,6 +14,13 @@
 #include "asm-offsets.h"
 
 
+/**
+ * @brief    Enter the kernel on the boot CPU using firmware arguments a0-a2.
+ *
+ * @note     Establishes the direct-map windows, clears BSS, preserves firmware
+ *           arguments, and selects the boot stack before entering C initialization.
+ *           Local IRQs remain masked until the kernel starts scheduling.
+ */
     .global         _start
     .section ".start", "ax"
 _start:
@@ -24,7 +31,7 @@ _start:
 	li.d	t0, CSR_DMW1_INIT	# CAC, PLV0, 0x9000 xxxx xxxx xxxx
 	csrwr	t0, LOONGARCH_CSR_DMWIN1
 
-	# Jump to 0x8000 high address, cacheable
+	/* Continue through the cached DMW1 alias at 0x9000.... */
 	pcaddi  t1, 0
 	li.d    t0, CSR_DMW1_BASE
 	bstrins.d  t0, t1, (DMW_PABITS - 1), 0
@@ -116,6 +123,13 @@ init_clear_regs:
 
 #ifdef RT_USING_SMP
     .section ".text", "ax"
+/**
+ * @brief    Enter a secondary CPU through the IOCSR mailbox entry address.
+ *
+ * @note     Initializes CPU-local direct-map state and selects the stack indexed
+ *           by hardware CPU ID. Shared BSS and firmware arguments belong to CPU 0
+ *           and must not be cleared again. Invalid CPU IDs remain parked.
+ */
     .global loongarch_secondary_entry
 loongarch_secondary_entry:
     li.d    t0, CSR_DMW0_INIT

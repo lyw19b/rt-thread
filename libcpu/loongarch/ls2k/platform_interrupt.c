@@ -16,6 +16,14 @@ static struct rt_irq_desc irq_table[MAX_INTR];
 static rt_uint64_t enabled_irqs;
 static rt_uint32_t irq_polarity[2], irq_edge[2];
 
+/**
+ * @brief    Mask one LS2K peripheral interrupt source.
+ *
+ * @note     Invalid source numbers are ignored. The shared enable mask and hardware
+ *           register update are protected against interrupts and concurrent CPUs.
+ *
+ * @param    irq is the controller source number in the range [0, MAX_INTR).
+ */
 void rt_hw_interrupt_mask(int irq)
 {
     rt_base_t level;
@@ -30,6 +38,14 @@ void rt_hw_interrupt_mask(int irq)
     rt_spin_unlock_irqrestore(&irq_lock, level);
 }
 
+/**
+ * @brief    Unmask one LS2K peripheral interrupt source.
+ *
+ * @note     Invalid source numbers are ignored. The shared enable mask and hardware
+ *           register update are protected against interrupts and concurrent CPUs.
+ *
+ * @param    irq is the controller source number in the range [0, MAX_INTR).
+ */
 void rt_hw_interrupt_umask(int irq)
 {
     rt_base_t level;
@@ -44,6 +60,17 @@ void rt_hw_interrupt_umask(int irq)
 }
 
 #ifndef RT_USING_NANO
+/**
+ * @brief    Set the trigger polarity and edge mode of a LIOINTC source.
+ *
+ * @note     Invalid source numbers or modes are ignored. Both register shadows and
+ *           hardware updates are serialized by the controller lock.
+ *
+ * @param    irq is the controller source number in the range [0, MAX_INTR).
+ *
+ * @param    mode is PIN_IRQ_MODE_RISING, PIN_IRQ_MODE_FALLING,
+ *           PIN_IRQ_MODE_HIGH_LEVEL or PIN_IRQ_MODE_LOW_LEVEL.
+ */
 void liointc_set_irq_mode(int irq, int mode)
 {
     rt_base_t level;
@@ -79,6 +106,22 @@ void liointc_set_irq_mode(int irq, int mode)
 
 #endif
 
+/**
+ * @brief    Replace an LS2K interrupt handler and its callback argument.
+ *
+ * @note     Registration does not unmask the source. A handler already copied by
+ *           another CPU may still run; the caller owns callback-argument lifetime.
+ *
+ * @param    vector is the controller source number in the range [0, MAX_INTR).
+ *
+ * @param    handler is the new callback, or RT_NULL to clear it.
+ *
+ * @param    parameter is the argument passed to the callback.
+ *
+ * @param    name is the optional name used by interrupt diagnostics.
+ *
+ * @return   The previous handler, or RT_NULL for an invalid vector or empty slot.
+ */
 rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
                                         void *parameter, const char *name)
 {
@@ -104,6 +147,13 @@ rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
     return previous;
 }
 
+/**
+ * @brief    Dispatch pending LS2K peripheral interrupts routed to CPU 0.
+ *
+ * @note     Runs in interrupt context. Edge status is acknowledged before the
+ *           callback; level-triggered devices must clear their own pending condition.
+ *           Callbacks run outside the controller lock and may mask their source.
+ */
 void platform_generic_irq(void)
 {
     rt_uint64_t pending = HWREG32(LS2K_COREISR_REG0(0));
@@ -148,6 +198,13 @@ void platform_generic_irq(void)
     }
 }
 
+/**
+ * @brief    Initialize the LS2K controller and route its sources to CPU 0.
+ *
+ * @note     Called once by the boot CPU with peripheral interrupts quiesced.
+ *           All sources start masked, active-high and level-triggered; board hooks
+ *           prepare the interrupt route before the controller registers are written.
+ */
 void rt_hw_interrupt_init(void)
 {
     unsigned int irq;

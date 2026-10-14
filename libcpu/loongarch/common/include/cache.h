@@ -62,9 +62,7 @@ rt_always_inline void rt_hw_cpu_icache_invalidate_all_local(void)
     __asm__ volatile("dbar 0; ibar 0" ::: "memory");
 }
 
-/**
- * @brief Multi-core
- */
+/* These aliases operate on the local CPU; they do not send remote IPIs. */
 
 #define rt_hw_cpu_dcache_clean rt_hw_cpu_dcache_clean_local
 #define rt_hw_cpu_dcache_invalidate rt_hw_cpu_dcache_invalidate_local
@@ -79,17 +77,22 @@ rt_always_inline void rt_hw_cpu_icache_invalidate_all_local(void)
 
 #define rt_hw_icache_invalidate_all rt_hw_cpu_icache_invalidate_all
 
-/** instruction barrier */
+/**
+ * @brief    Order data writes before subsequent local instruction execution.
+ */
 static inline void rt_hw_cpu_sync(void)
 {
     __asm__ volatile("dbar 0; ibar 0" ::: "memory");
 }
 
 /**
- * @brief local cpu icahce & dcache synchronization
+ * @brief    Synchronize modified code for execution on the local CPU.
  *
- * @param addr
- * @param size
+ * @note     The implementation uses dbar/ibar and does not walk the range.
+ *
+ * @param    addr is the start of the modified code range.
+ *
+ * @param    size is the range length in bytes.
  */
 void rt_hw_sync_cache_local(void *addr, int size);
 

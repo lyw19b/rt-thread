@@ -7,6 +7,12 @@
 #include "timer.h"
 #include "loongarch.h"
 
+/**
+ * @brief    Program the local periodic timer for RT_TICK_PER_SECOND ticks.
+ *
+ * @note     Reads the constant-counter frequency from CPUCFG4/5. Each CPU calls
+ *           this during startup; the CPU interrupt dispatcher acknowledges each tick.
+ */
 rt_weak void rt_hw_timer_init(void)
 {
     rt_uint64_t base = read_cpucfg(LOONGARCH_CPUCFG4);
@@ -25,6 +31,12 @@ rt_weak void rt_hw_timer_init(void)
     set_csr_ecfg(ECFGF_TIMER);
 }
 
+/**
+ * @brief    Advance the RT-Thread tick from the local timer interrupt.
+ *
+ * @note     The caller has acknowledged the timer and entered interrupt context.
+ *           In SMP builds, rt_tick_increase() handles per-CPU and global tick accounting.
+ */
 rt_weak void rt_hw_timer_handler(void)
 {
     rt_tick_increase();

@@ -13,7 +13,17 @@
 #include <errno.h>
 #include "stack.h"
 
-/* The toolchain's musl uses Linux syscall numbers inside kernel stdio. */
+/**
+ * @brief    Adapt the kernel toolchain libc file operations to RT-Thread DFS.
+ *
+ * @note     Only kernel-mode callers use these Linux syscall numbers. Smart user
+ *           calls retain the official RT-Thread numbering. Buffer pointers are trusted
+ *           kernel addresses, and DFS operations may sleep.
+ *
+ * @param    regs is the kernel-mode syscall frame containing a7 and its arguments.
+ *
+ * @return   The operation result, a negative errno, or -ENOSYS for unsupported calls.
+ */
 rt_base_t loongarch_kernel_syscall(struct pt_regs *regs)
 {
     rt_base_t result;

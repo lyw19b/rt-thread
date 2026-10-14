@@ -18,18 +18,21 @@ RT_STATIC_ASSERT(exception_fpu_offset, offsetof(struct pt_regs, f) == PT_FPR0);
 RT_STATIC_ASSERT(switch_fpu_offset, offsetof(struct rt_hw_switch_frame, f) == RT_THREAD_FPR24);
 
 /**
- * This function will initialize thread stack, we assuming
- * when scheduler restore this new thread, context will restore
- * an entry to user first application
+ * @brief    Build the initial kernel-thread context for the first scheduler restore.
  *
- * @param tentry the entry of thread
- * @param parameter the parameter of entry
- * @param stack_addr the beginning stack address
- * @param texit the function will be called when thread exit
+ * @note     Aligns the stack to 16 bytes. The switch frame passes entry, argument
+ *           and exit routine in s0-s2 to _rt_thread_entry; it is not a user-mode frame.
  *
- * @return stack address
+ * @param    tentry is the thread entry function.
+ *
+ * @param    parameter is the argument passed to tentry.
+ *
+ * @param    stack_addr is the supplied top of the downward-growing stack.
+ *
+ * @param    texit is the exit routine called when tentry returns.
+ *
+ * @return   The saved stack pointer to store in the thread control block.
  */
-
 rt_uint8_t *rt_hw_stack_init(void *tentry, void *parameter, rt_uint8_t *stack_addr, void *texit)
 {
     rt_ubase_t top = RT_ALIGN_DOWN((rt_ubase_t)stack_addr, 16);

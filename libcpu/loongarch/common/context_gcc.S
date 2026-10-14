@@ -17,14 +17,22 @@
 
 .section ".text", "ax"
 
-/*
- * void rt_hw_context_switch(rt_uint32 from, rt_uint32 to)
- * a0 --> from
- * a1 --> to
+/**
+ * @brief    Save the current thread context and restore the selected thread.
+ *
+ * @note     Called with local IRQs masked. In SMP builds the scheduler context
+ *           lock remains held until the new stack is active. The switch frame saves
+ *           callee-saved registers and FPU state; an IRQ frame remains on the old stack.
+ *
+ * @param    from is the outgoing saved stack-pointer slot address in a0.
+ *
+ * @param    to is the incoming saved stack-pointer slot address in a1.
+ *
+ * @param    to_thread is the incoming thread in a2 for SMP builds.
  */
 .globl rt_hw_context_switch
 rt_hw_context_switch:
-    // adjust sp point to bottom of pt_regs
+    /* Allocate the switch frame below the current kernel stack pointer. */
     addi.d   sp, sp, -RT_THREAD_END
     save_switch_fpu
     cpu_save_csr_reg sp
@@ -54,10 +62,15 @@ rt_hw_context_switch:
     jr   ra
 
 
-/*
- * void rt_hw_context_switch_to(rt_ubase_t to);
+/**
+ * @brief    Restore the first thread context on the local CPU.
  *
- * a0 --> to SP pointer
+ * @note     Called by scheduler startup with local IRQs masked. No outgoing
+ *           context is saved, and execution does not return to the startup caller.
+ *
+ * @param    to is the incoming saved stack-pointer slot address in a0.
+ *
+ * @param    to_thread is the incoming thread in a1 for SMP builds.
  */
 .global rt_hw_context_switch_to
 rt_hw_context_switch_to:
@@ -83,6 +96,9 @@ rt_hw_context_switch_to:
     jr   ra
 
 
+/**
+ * @brief    Wait for an interrupt before returning to the idle loop.
+ */
 .global cpu_idle
 cpu_idle:
 	idle   0x0

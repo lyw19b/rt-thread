@@ -2,6 +2,13 @@
 #include "stackframe.h"
 #include "asm-generic.h"
 
+/**
+ * @brief    Save the syscall exception frame and dispatch the requested service.
+ *
+ * @note     The C dispatcher updates the saved result and return PC. Smart
+ *           user returns pass through exit/signal handling; kernel calls restore
+ *           their interrupted context directly.
+ */
 START_POINT(handle_syscall)
     SAVE_ALL
     move a0, sp

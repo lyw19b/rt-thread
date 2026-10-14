@@ -49,12 +49,12 @@ _666_\exception:
 .endm
 
 
-/*
-   We judge if execute thread switch when return from
-   exception.
-   Note: this codes must be called by instrution
-   "la.abs and jirl" in exception routine.
-*/
+/**
+ * @brief    Complete deferred scheduling before restoring an exception frame.
+ *
+ * @note     The saved frame is at sp and local IRQs are masked. Smart user
+ *           returns also process pending exit requests and signals before restoration.
+ */
 START_POINT(ret_from_exception)
 ret_from_exception:
 #ifdef RT_USING_SMP
@@ -114,6 +114,12 @@ trap_entry:
     ret
 
 
+/**
+ * @brief    Save the context and resolve a load or instruction-fetch fault.
+ *
+ * @note     Shared by software refill and hardware PTW. BADV is copied into the
+ *           exception frame before calling C; a repaired fault retries the instruction.
+ */
 .global handle_tlb_load_ptw
 handle_tlb_load_ptw:
     // save t0,t1
@@ -125,6 +131,12 @@ handle_tlb_load_ptw:
     jirl        ra, t0, 0
     RESTORE_ALL_AND_RET
 
+/**
+ * @brief    Save the context and resolve a store fault.
+ *
+ * @note     Shared by software refill and hardware PTW. BADV is copied into the
+ *           exception frame before calling C; a repaired fault retries the instruction.
+ */
 .global handle_tlb_store_ptw
 handle_tlb_store_ptw:
     // save t0,t1
@@ -136,6 +148,12 @@ handle_tlb_store_ptw:
     jirl        ra, t0, 0
     RESTORE_ALL_AND_RET
 
+/**
+ * @brief    Save the context and resolve a write-permission fault.
+ *
+ * @note     Shared by software refill and hardware PTW. BADV is copied into the
+ *           exception frame before calling C; a repaired fault retries the instruction.
+ */
 .global handle_tlb_modify_ptw
 handle_tlb_modify_ptw:
     // save t0,t1
@@ -148,6 +166,13 @@ handle_tlb_modify_ptw:
     RESTORE_ALL_AND_RET
 
 
+/**
+ * @brief    Refill a TLB entry by walking the page tables in software.
+ *
+ * @note     Runs in refill context without using a kernel stack. TLBRSAVE
+ *           preserves t0 while PGD and the configured directory levels locate the
+ *           even/odd leaf pair. Invalid leaves are handled by the page-fault path.
+ */
 START_POINT(handle_tlb_sw_refill)
     csrwr       t0, LOONGARCH_CSR_TLBRSAVE
     csrrd       t0, LOONGARCH_CSR_PGD
@@ -162,10 +187,13 @@ START_POINT_END(handle_tlb_sw_refill)
 
 
 # Enable and Disable Interrupt
-/*
- * void rt_hw_interrupt_enable(rt_base_t level);
+/**
+ * @brief    Restore the local interrupt-enable bit from a saved CRMD value.
  *
- * a0 --> to level
+ * @note     Only CRMD.IE is modified. In SMP builds this symbol is exported as
+ *           rt_hw_local_irq_enable(); it does not release the global CPU lock.
+ *
+ * @param    level is the value in a0 returned by the matching disable operation.
  */
 .global rt_hw_interrupt_enable
 rt_hw_interrupt_enable:
@@ -173,10 +201,13 @@ rt_hw_interrupt_enable:
     csrxchg  a0, t0, LOONGARCH_CSR_CRMD
     jirl     zero, ra, 0
 
-/*
- * rt_base_t rt_hw_interrupt_disable(void);
+/**
+ * @brief    Mask local interrupts and return the previous CRMD value.
  *
- * a0 --> to rt_base_t
+ * @note     In SMP builds this symbol is rt_hw_local_irq_disable(). It does
+ *           not acquire a scheduler or global CPU lock.
+ *
+ * @return   The saved CRMD value in a0, for the matching restore operation.
  */
 .global rt_hw_interrupt_disable
 rt_hw_interrupt_disable:

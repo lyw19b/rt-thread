@@ -66,8 +66,11 @@ extern void handle_tlb_modify_ptw(void);
 extern void handle_tlb_sw_refill(void);
 
 /**
- * This function will un-mask a interrupt.
- * @param vector the interrupt number
+ * @brief    Provide the default no-op hook for unmasking a platform interrupt.
+ *
+ * @note     The BSP interrupt controller supplies the hardware implementation.
+ *
+ * @param    vector is the platform interrupt number.
  */
 rt_weak void rt_hw_interrupt_umask(int vector)
 {
@@ -75,10 +78,20 @@ rt_weak void rt_hw_interrupt_umask(int vector)
 }
 
 /**
- * This function will install a interrupt service routine to a interrupt.
- * @param vector the interrupt number
- * @param new_handler the interrupt service routine to be installed
- * @param old_handler the old interrupt service routine
+ * @brief    Install or query a handler in the fallback CPU interrupt table.
+ *
+ * @note     This weak fallback does not serialize concurrent updates. BSPs with a
+ *           peripheral controller override it with their own registration interface.
+ *
+ * @param    vector is the CPU interrupt-table index.
+ *
+ * @param    handler is the new callback, or RT_NULL to query the current callback.
+ *
+ * @param    param is the argument passed to the new callback.
+ *
+ * @param    name is the name used by interrupt diagnostics.
+ *
+ * @return   The previous handler, or RT_NULL if vector is out of range.
  */
 rt_weak rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
         void *param, const char *name)
@@ -102,10 +115,19 @@ rt_weak rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t ha
     return old_handler;
 }
 
+/**
+ * @brief    Provide the default no-op platform interrupt initialization hook.
+ */
 rt_weak void platform_irq_init()
 {
 }
 
+/**
+ * @brief    Dispatch pending CPU hardware interrupt bits through the fallback table.
+ *
+ * @note     Runs in interrupt context. BSPs with a cascaded interrupt controller
+ *           override this hook to translate CPU input lines into peripheral sources.
+ */
 rt_weak void platform_generic_irq()
 {
     rt_uint64_t hw_irq_pending = (read_csr_estat() & CSR_ESTAT_IS_HW);
@@ -131,9 +153,14 @@ rt_weak void platform_generic_irq()
 }
 
 
+/**
+ * @brief    Initialize the fallback interrupt table and invoke the platform hook.
+ *
+ * @note     Called during boot before device interrupts are enabled.
+ */
 rt_weak void rt_hw_interrupt_init()
 {
-    /* Enable machine external interrupts. */
+    /* Populate the fallback table before platform initialization. */
     int idx = 0;
     /* init exceptions table */
     for (idx = 0; idx < MAX_HANDLERS; idx++)
@@ -180,6 +207,16 @@ void *exception_table[EXCCODE_INT_START] = {
 };
 
 
+/**
+ * @brief    Terminate a faulting Smart process or stop on a kernel exception.
+ *
+ * @note     User-mode faults restore the interrupted IRQ state before process
+ *           cleanup, which may sleep. Kernel faults do not return.
+ *
+ * @param    regs is the saved exception frame used to identify the faulting mode.
+ *
+ * @param    reason is the diagnostic description of the exception.
+ */
 static void fatal_exception(struct pt_regs *regs, const char *reason)
 {
     rt_kprintf("%s: pc=%p address=%p\n", reason,
@@ -231,6 +268,14 @@ void do_ri(struct pt_regs *regs)
     fatal_exception(regs, "Illegal or privileged instruction");
 }
 
+/**
+ * @brief    Dispatch one pending IPI, timer or platform interrupt class.
+ *
+ * @note     Called with local IRQs masked. Accounts interrupt nesting around
+ *           each handler; the assembly return path performs any deferred scheduling.
+ *
+ * @param    regs is the saved exception frame supplied by the vector entry.
+ */
 void do_rt_dispatch_trap(struct pt_regs *regs)
 {
     rt_uint64_t estat;
@@ -281,6 +326,15 @@ void do_rt_dispatch_trap(struct pt_regs *regs)
     }
 }
 
+/**
+ * @brief    Resolve a Smart mapping or permission fault in the appropriate address space.
+ *
+ * @note     Entered with local IRQs masked. The resolver runs with the interrupted
+ *           IRQ state and may sleep; a repaired fault returns with IRQs masked again.
+ *           Unresolved user faults exit the process; unresolved kernel faults stop.
+ *
+ * @param    regs is the saved frame containing BADV, ESTAT and the interrupted mode.
+ */
 void do_page_fault(struct pt_regs *regs)
 {
 #ifdef RT_USING_SMART
@@ -361,6 +415,12 @@ static void setup_vint_size(unsigned int size)
     csr_xchg32(vs<<CSR_ECFG_VS_SHIFT, CSR_ECFG_VS, LOONGARCH_CSR_ECFG);
 }
 
+/**
+ * @brief    Install the shared exception-vector addresses in the local CPU CSRs.
+ *
+ * @note     CPU 0 selects the shared vector addresses before secondary CPUs start.
+ *           Software refill also installs TLBRENTRY on every CPU.
+ */
 static void configure_exception_vector(void)
 {
     if (rt_hw_cpu_id() == 0)
@@ -376,7 +436,18 @@ static void configure_exception_vector(void)
 #endif
 }
 
-/* Install CPU exception handler */
+/**
+ * @brief    Install a fixed vector stub and its handler address.
+ *
+ * @note     Only the boot CPU writes the shared vector image, before secondary
+ *           CPUs can execute it. The barrier synchronizes local instruction fetch.
+ *
+ * @param    offset is the byte offset of the vector slot from EENTRY.
+ *
+ * @param    addr is the handler entry address stored in the stub.
+ *
+ * @param    size is the legacy argument; each installed stub occupies 40 bytes.
+ */
 void set_handler(unsigned long offset, void *addr, unsigned long size)
 {
     extern char exception_vector_stub[];
@@ -386,6 +457,13 @@ void set_handler(unsigned long offset, void *addr, unsigned long size)
     __asm__ volatile ("\tibar 0\n"::);
 }
 
+/**
+ * @brief    Initialize the local vector CSRs and exception dispatch entries.
+ *
+ * @note     CPU 0 builds the shared 512-byte vector slots and software refill
+ *           entry. Secondary CPUs reuse the published image and enable their IPI
+ *           source. The caller keeps local IRQs masked throughout initialization.
+ */
 void trap_init(void)
 {
     unsigned int i;

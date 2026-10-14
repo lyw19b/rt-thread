@@ -43,6 +43,13 @@ static void ipi_send(unsigned int cpu, unsigned int vector)
     iocsr_write32(IPI_SEND_WAIT | (cpu << 16) | vector, IPI_SEND);
 }
 
+/**
+ * @brief    Publish a secondary CPU entry address through IOCSR mailbox 0.
+ *
+ * @param    cpu is the destination hardware CPU ID.
+ *
+ * @param    entry is the physical entry address expected by the firmware.
+ */
 static void mailbox_write(unsigned int cpu, rt_ubase_t entry)
 {
     rt_uint64_t target = IPI_SEND_WAIT | (cpu << 16);
@@ -52,6 +59,13 @@ static void mailbox_write(unsigned int cpu, rt_ubase_t entry)
     iocsr_write64(target | (entry << 32), IPI_MAIL_SEND);
 }
 
+/**
+ * @brief    Read the mask of CPUs available for inter-processor requests.
+ *
+ * @note     Acquire ordering pairs with each CPU publishing its initialized state.
+ *
+ * @return   A bit mask indexed by hardware CPU ID.
+ */
 unsigned int loongarch_cpu_online_mask(void)
 {
     return __atomic_load_n(&online_mask, __ATOMIC_ACQUIRE);
@@ -65,6 +79,12 @@ static unsigned int tlb_request[RT_CPUS_NR][RT_CPUS_NR];
 static unsigned int tlb_ack[RT_CPUS_NR][RT_CPUS_NR];
 static unsigned int tlb_sequence[RT_CPUS_NR];
 
+/**
+ * @brief    Acknowledge pending TLB invalidations on the local CPU.
+ *
+ * @note     Preserves the local IRQ state and does not acquire locks. Spin waits
+ *           call this even with IRQs masked, so a remote page-table owner can progress.
+ */
 void loongarch_tlb_poll(void)
 {
     rt_base_t level = rt_hw_local_irq_disable();
@@ -83,6 +103,13 @@ void loongarch_tlb_poll(void)
     rt_hw_local_irq_enable(level);
 }
 
+/**
+ * @brief    Invalidate local and remote TLBs before returning to the caller.
+ *
+ * @note     Masks local IRQs to serialize requests from this CPU. While waiting
+ *           for every online peer to acknowledge, services incoming requests without
+ *           acquiring another page-table lock. CPU hot-unplug is not supported.
+ */
 void loongarch_tlb_flush_all(void)
 {
     rt_base_t level = rt_hw_local_irq_disable();
@@ -118,11 +145,24 @@ void loongarch_tlb_poll(void)
 }
 #endif
 
+/**
+ * @brief    Initialize an unlocked hardware spinlock.
+ *
+ * @param    lock is the spinlock to initialize before it is shared.
+ */
 void rt_hw_spin_lock_init(rt_hw_spinlock_t *lock)
 {
     __atomic_store_n(&lock->value, 0, __ATOMIC_RELAXED);
 }
 
+/**
+ * @brief    Acquire a hardware spinlock with acquire memory ordering.
+ *
+ * @note     The caller manages scheduler and IRQ exclusion. A contended wait
+ *           services TLB requests so it cannot block a remote shootdown behind the lock.
+ *
+ * @param    lock is the spinlock to acquire.
+ */
 void rt_hw_spin_lock(rt_hw_spinlock_t *lock)
 {
     while (__atomic_exchange_n(&lock->value, 1, __ATOMIC_ACQUIRE))
@@ -135,11 +175,26 @@ void rt_hw_spin_lock(rt_hw_spinlock_t *lock)
     }
 }
 
+/**
+ * @brief    Release a hardware spinlock with release memory ordering.
+ *
+ * @param    lock is the spinlock held by the caller.
+ */
 void rt_hw_spin_unlock(rt_hw_spinlock_t *lock)
 {
     __atomic_store_n(&lock->value, 0, __ATOMIC_RELEASE);
 }
 
+/**
+ * @brief    Send an RT-Thread IPI to the selected online CPUs.
+ *
+ * @note     Offline CPUs are ignored. A memory barrier publishes preceding
+ *           shared-memory updates before the notification is sent.
+ *
+ * @param    vector is the IPI bit index in the range [0, RT_MAX_IPI).
+ *
+ * @param    cpu_mask is the destination mask indexed by hardware CPU ID.
+ */
 void rt_hw_ipi_send(int vector, unsigned int cpu_mask)
 {
     unsigned int cpu;
@@ -152,6 +207,12 @@ void rt_hw_ipi_send(int vector, unsigned int cpu_mask)
             ipi_send(cpu, vector);
 }
 
+/**
+ * @brief    Acknowledge and dispatch pending local IOCSR interrupts.
+ *
+ * @note     Runs in interrupt context. TLB requests are serviced before scheduler
+ *           and SMP callbacks. A stop request parks this CPU with local IRQs masked.
+ */
 void loongarch_ipi_handler(void)
 {
     unsigned int pending = ipi_read(IPI_STATUS);
@@ -170,6 +231,13 @@ void loongarch_ipi_handler(void)
         rt_smp_call_ipi_handler(RT_SMP_CALL_IPI, RT_NULL);
 }
 
+/**
+ * @brief    Start the configured secondary CPUs from CPU 0.
+ *
+ * @note     Firmware must wait for a physical entry address in IOCSR mailbox 0.
+ *           CPU IDs must be contiguous from zero. Startup stops with an assertion if
+ *           a CPU does not publish its online bit within five seconds.
+ */
 void rt_hw_secondary_cpu_up(void)
 {
     extern void loongarch_secondary_entry(void);
@@ -201,6 +269,13 @@ void rt_hw_secondary_cpu_up(void)
     rt_kprintf("SMP: %u CPUs online (mask 0x%x)\n", RT_CPUS_NR, loongarch_cpu_online_mask());
 }
 
+/**
+ * @brief    Initialize a secondary CPU and enter its scheduler.
+ *
+ * @note     Entered with local IRQs masked and a private boot stack. Publishes
+ *           CPU-local exception/MMU readiness, then waits for the boot CPU startup
+ *           lock before enabling its timer and starting scheduling. Does not return.
+ */
 void loongarch_secondary_start(void)
 {
     init_cpu_early();
@@ -217,6 +292,9 @@ void loongarch_secondary_start(void)
     rt_system_scheduler_start();
 }
 
+/**
+ * @brief    Wait for an interrupt on an idle secondary CPU.
+ */
 void rt_hw_secondary_cpu_idle_exec(void)
 {
     __asm__ volatile("idle 0");
