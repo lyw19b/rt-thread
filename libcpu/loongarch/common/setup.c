@@ -24,55 +24,36 @@ unsigned long fw_arg1;
 unsigned long fw_arg2;
 
 #ifdef RT_USING_SMART
-void mmu_tlb_init() {
-	write_csr_pagesize(PS_DEFAULT_SIZE);
-	write_csr_stlbpgsize(PS_DEFAULT_SIZE);
-	write_csr_tlbrefill_pagesize(PS_DEFAULT_SIZE);
-}
+static void mmu_init(void)
+{
+    unsigned long width = ARCH_PAGE_SHIFT - 3;
+    unsigned long pwcl, pwch;
 
+    write_csr_pagesize(PS_DEFAULT_SIZE);
+    write_csr_stlbpgsize(PS_DEFAULT_SIZE);
+    write_csr_tlbrefill_pagesize(PS_DEFAULT_SIZE);
 
-void mmu_ptw_init() {
-
-	// three level page table.
-	unsigned long pwcl = 0;
-	unsigned long pwch = 0;
-
-	unsigned long pgd_idx = 30;
-	unsigned long pgd_wdt = (ARCH_PAGE_SHIFT - 3);
-
-	unsigned long pmd_idx = 21;
-	unsigned long pmd_wdt = (ARCH_PAGE_SHIFT - 3);
-
-	unsigned long pte_idx = 12;
-	unsigned long pte_wdt = (ARCH_PAGE_SHIFT - 3);
-
-	// set csr PWCL
-	pwcl =  (pte_idx << MMU_PG_LEVEL_0_BASE_SHIFT) | (pte_wdt << MMU_PG_LEVEL_0_WIDTH_SHIFT)  // PTE
-	      | (pmd_idx << MMU_PG_LEVEL_1_BASE_SHIFT) | (pmd_wdt << MMU_PG_LEVEL_1_WIDTH_SHIFT)  // PMD
-	      | (MMU_PG_LEVEL_PTE_WIDTH_64 << MMU_PG_LEVEL_PTE_WIDTH_SHIFT); // PTE size
-
-	// set csr PWCH
-	pwch = (pgd_idx << MMU_PG_LEVEL_3_BASE_SHIFT) | (pgd_wdt << MMU_PG_LEVEL_3_WIDTH_SHIFT);
-
+    /* The software refill handler and hardware walker use the same 3-level
+     * layout: 9-bit indices at bits 30, 21 and 12, with 64-bit entries. */
+    pwcl = (12UL << MMU_PG_LEVEL_0_BASE_SHIFT) | (width << MMU_PG_LEVEL_0_WIDTH_SHIFT)
+          | (21UL << MMU_PG_LEVEL_1_BASE_SHIFT) | (width << MMU_PG_LEVEL_1_WIDTH_SHIFT);
+    pwch = (30UL << MMU_PG_LEVEL_3_BASE_SHIFT) | (width << MMU_PG_LEVEL_3_WIDTH_SHIFT);
 #ifdef LOONGARCH_HARDWARE_PTW
-	// enable hardware ptw
-	pwch |= CSR_PWCTL1_PTW;
+    RT_ASSERT(read_cpucfg(LOONGARCH_CPUCFG2) & CPUCFG2_PTW);
+    pwch |= CSR_PWCTL1_PTW;
 #endif
-
-	csr_write64(pwcl, LOONGARCH_CSR_PWCTL0);
-	csr_write64(pwch, LOONGARCH_CSR_PWCTL1);
-
-
-	__asm__ __volatile__ ("invtlb 0, $zero, $zero\n\t" :::"memory");
-
+    /* Writing the complete value also clears a firmware-enabled PTW bit when
+     * software refill is selected. This runs separately on every CPU. */
+    csr_write64(pwcl, LOONGARCH_CSR_PWCTL0);
+    csr_write64(pwch, LOONGARCH_CSR_PWCTL1);
+    __asm__ volatile("invtlb 0, $zero, $zero" ::: "memory");
 }
 #endif
 
 void init_cpu_early(void)
 {
-	trap_init();
+    trap_init();
 #ifdef RT_USING_SMART
-	mmu_tlb_init();
-	mmu_ptw_init();
+    mmu_init();
 #endif
 }

@@ -112,7 +112,9 @@ void *rt_hw_mmu_map(rt_aspace_t aspace, void *vaddr, void *paddr,
             return RT_NULL;
         }
         /* The aspace layer may replace a leaf while expanding a mapping. */
-        *pte = (pa + done) | attr;
+        /* PTW tests Present (bit 7), while software refill uses Valid (bit 0).
+         * Keep both so the same page tables work with either refill path. */
+        *pte = (pa + done) | attr | MMU_PAGE_PRESENT;
         if (attr & MMU_PAGE_WRITE)
             *pte |= MMU_PAGE_DIRTY;
     }

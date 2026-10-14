@@ -175,9 +175,13 @@ void loongarch_set_kernel_stack(void)
 void loongarch_ret_to_user(struct pt_regs *regs)
 {
     rt_thread_self()->user_ctx.ctx = regs;
+    /* Exit and signal delivery acquire sleeping locks and may fault in user
+     * pages. The final register restore still runs with local IRQs masked. */
+    rt_hw_local_irq_enable(CSR_CRMD_IE);
     if (lwp_check_exit_request())
         sys_exit(0);
     lwp_thread_signal_catch(regs);
+    rt_hw_local_irq_disable();
 }
 
 void arch_syscall_set_errno(void *frame, int expected, int code)

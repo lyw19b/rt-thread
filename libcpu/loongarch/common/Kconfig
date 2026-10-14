@@ -6,13 +6,24 @@ menu "RT-Thread LoongArch CPU"
         help
             Using Float Point Unit in code.
 
-    config LOONGARCH_HARDWARE_PTW
+    config LOONGARCH_HAS_HARDWARE_PTW
         bool
-        default n
+
+    choice
+        prompt "Smart TLB refill"
+        depends on RT_USING_SMART
+        default LOONGARCH_SOFTWARE_PTW
 
     config LOONGARCH_SOFTWARE_PTW
-        bool "Using LOONGARCH Software Page Table Walk"
-        default y if RT_USING_SMART
-        depends on RT_USING_SMART && !LOONGARCH_HARDWARE_PTW
+        bool "Software TLB refill"
+
+    config LOONGARCH_HARDWARE_PTW
+        bool "Hardware page table walk"
+        depends on LOONGARCH_HAS_HARDWARE_PTW
+        help
+            Requires CPUCFG2.PTW and a CPU implementing the hardware walker.
+            LS2K0300 and LS2K1000LA use software refill only.
+
+    endchoice
 
 endmenu

@@ -187,7 +187,10 @@ static void fatal_exception(struct pt_regs *regs, const char *reason)
 #ifdef RT_USING_SMART
     /* A user fault must not stop other processes or the kernel. */
     if (regs->r_prmd & 3)
+    {
+        rt_hw_local_irq_enable(regs->r_prmd & CSR_PRMD_PIE);
         sys_exit_group(-1);
+    }
 #endif
     rt_hw_interrupt_disable();
     while (1) {}
@@ -309,11 +312,18 @@ void do_page_fault(struct pt_regs *regs)
     default:
         goto fatal;
     }
+    /* Demand paging can sleep. Restore the interrupted context's IRQ state
+     * while fixing the fault, then mask again before the exception return. */
+    rt_hw_local_irq_enable(regs->r_prmd & CSR_PRMD_PIE);
     if (rt_aspace_fault_try_fix(aspace, &msg))
+    {
+        rt_hw_local_irq_disable();
         return;
+    }
 fatal:
     if (user)
     {
+        rt_hw_local_irq_enable(regs->r_prmd & CSR_PRMD_PIE);
         rt_kprintf("User page fault: pc=%p address=%p code=%lu\n",
                    (void *)regs->r_era, (void *)regs->r_bvaddr, code);
         sys_exit_group(-1);

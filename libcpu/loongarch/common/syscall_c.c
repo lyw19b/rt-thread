@@ -33,7 +33,9 @@ void rt_dispatch_syscall(struct pt_regs *regs)
     thread->thread_idr = (void *)regs->r_tp;
     if (regs->r_a7 == 0xfe)
     {
+        rt_hw_local_irq_enable(4);
         arch_signal_ucontext_restore(regs->r_sp, (rt_base_t)regs);
+        rt_hw_local_irq_disable();
         return;
     }
     call = (loongarch_syscall_t)lwp_get_sys_api(regs->r_a7);

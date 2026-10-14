@@ -46,6 +46,8 @@ arch_ret_to_user:
 
 .global loongarch_restore_user
 loongarch_restore_user:
+    li.w t0, CSR_CRMD_IE
+    csrxchg zero, t0, LOONGARCH_CSR_CRMD
     move sp, a0
     RESTORE_ALL_AND_RET
 

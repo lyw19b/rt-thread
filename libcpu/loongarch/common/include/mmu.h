@@ -103,6 +103,7 @@ struct mem_desc
 #define MMU_CACHE_CC      (1 << MMU_CACHE_SHIFT) /* Coherent Cached */
 
 #define MMU_PAGE_DIRTY    (1 << MMU_PAGE_DIRTY_SHIFT)
+#define MMU_PAGE_PRESENT  (1 << MMU_PAGE_PRESENT_SHIFT)
 #define MMU_PAGE_VALID    (1 << MMU_PAGE_VALID_SHIFT)
 #define MMU_PAGE_ACCESSED (1 << MMU_PAGE_ACCESSED_SHIFT)
 #define MMU_PAGE_WRITE    (1 << MMU_PAGE_WRITE_SHIFT)
