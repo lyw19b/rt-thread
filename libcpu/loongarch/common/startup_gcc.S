@@ -124,6 +124,7 @@ loongarch_secondary_entry:
     csrwr   t0, LOONGARCH_CSR_DMWIN1
     la.abs  t0, secondary_cached
     jr      t0
+
 secondary_cached:
     li.w    t0, 0xb0
     csrwr   t0, LOONGARCH_CSR_CRMD
@@ -134,9 +135,11 @@ secondary_cached:
     move    tp, zero
     csrrd   t0, LOONGARCH_CSR_CPUID
     andi    t0, t0, 0x3ff
+
     li.w    t1, RT_CPUS_NR
     bgeu    t0, t1, secondary_park
     beqz    t0, secondary_park
+
 #if RT_CPUS_NR > 1
     /* CPU n uses stack n-1, whose top is base + n * stack_size. */
     li.w    t1, __STACKSIZE__
@@ -145,6 +148,7 @@ secondary_cached:
     add.d   sp, sp, t0
     bl      loongarch_secondary_start
 #endif
+
 secondary_park:
     idle    0
     b       secondary_park

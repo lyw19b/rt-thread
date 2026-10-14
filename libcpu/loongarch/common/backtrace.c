@@ -10,8 +10,6 @@
  */
 
 
-#if 1
-
 #define DBG_TAG "hw.backtrace"
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
@@ -136,4 +134,4 @@ rt_err_t rt_hw_backtrace_frame_get(rt_thread_t thread, struct rt_hw_backtrace_fr
     return rc;
 }
 
-#endif
+

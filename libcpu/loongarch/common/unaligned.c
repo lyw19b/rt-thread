@@ -1,9 +1,21 @@
+/*
+ * Copyright (C) 2020-2025 Loongson Technology Corporation Limited
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author       Notes
+ * 2025-03-10     LoongsonLab  the first version
+ */
+
 #include <rtthread.h>
 #include <rthw.h>
 
 #include <loongarch.h>
 #include <inst.h>
 #include <stack.h>
+
+// this codes is forked from liunx project.
 
 static inline rt_uint64_t read_fpr(rt_uint32_t idx)
 {

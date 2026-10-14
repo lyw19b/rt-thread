@@ -101,6 +101,7 @@ void loongarch_tlb_flush_all(void)
             ipi_send(cpu, IPI_TLB);
         }
     }
+    
     for (cpu = 0; cpu < RT_CPUS_NR; cpu++)
     {
         if (mask & (1U << cpu))

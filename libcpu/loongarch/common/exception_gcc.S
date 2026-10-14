@@ -161,9 +161,6 @@ START_POINT(handle_tlb_sw_refill)
 START_POINT_END(handle_tlb_sw_refill)
 
 
-
-
-
 # Enable and Disable Interrupt
 /*
  * void rt_hw_interrupt_enable(rt_base_t level);
@@ -200,3 +197,4 @@ exception_vector_stub:
     jr t0
     .space 12
     .dword 0
+

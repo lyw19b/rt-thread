@@ -29,8 +29,10 @@ void rt_dispatch_syscall(struct pt_regs *regs)
         regs->r_era += 4;
         return;
     }
+    
     thread->user_ctx.ctx = regs;
     thread->thread_idr = (void *)regs->r_tp;
+    
     if (regs->r_a7 == 0xfe)
     {
         rt_hw_local_irq_enable(4);
@@ -38,15 +40,20 @@ void rt_dispatch_syscall(struct pt_regs *regs)
         rt_hw_local_irq_disable();
         return;
     }
+    
     call = (loongarch_syscall_t)lwp_get_sys_api(regs->r_a7);
+    
     /* Keep ERA at the syscall until fork has copied the parent's frame. */
     rt_hw_local_irq_enable(4);
+    
     regs->r_a0 = call ? call(regs->r_a0, regs->r_a1, regs->r_a2,
         regs->r_a3, regs->r_a4, regs->r_a5, regs->r_a6) : -ENOSYS;
+    
     rt_hw_local_irq_disable();
     regs->r_tp = (rt_ubase_t)thread->thread_idr;
     regs->r_era += 4;
 }
+
 #else
 void rt_dispatch_syscall(struct pt_regs *regs)
 {

@@ -38,6 +38,7 @@ rt_uint8_t *rt_hw_stack_init(void *tentry, void *parameter, rt_uint8_t *stack_ad
 
     RT_ASSERT(sizeof(*frame) == PT_SWITCH_FRAME_SIZE);
     rt_memset(frame, 0, sizeof(*frame));
+    
     frame->r_ra = (rt_ubase_t)_rt_thread_entry;
     frame->r_s0 = (rt_ubase_t)tentry;
     frame->r_s1 = (rt_ubase_t)parameter;

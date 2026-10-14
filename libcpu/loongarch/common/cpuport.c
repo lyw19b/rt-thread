@@ -18,11 +18,13 @@
  *
  */
 volatile rt_ubase_t rt_interrupt_from_thread = 0;
+
 /**
  * @brief to thread used interrupt context switch
  *
  */
 volatile rt_ubase_t rt_interrupt_to_thread = 0;
+
 /**
  * @brief flag to indicate context switch in interrupt or not
  *
@@ -33,7 +35,8 @@ volatile rt_ubase_t rt_thread_switch_interrupt_flag = 0;
  * void rt_hw_context_switch_interrupt(rt_ubase_t from, rt_ubase_t to
  *                                     rt_thread_t from_tr, rt_thread_t to_tr);
  */
-void rt_hw_context_switch_interrupt(rt_ubase_t from, rt_ubase_t to, rt_thread_t from_thread, rt_thread_t to_thread)
+void rt_hw_context_switch_interrupt(rt_ubase_t from, rt_ubase_t to, 
+                                    rt_thread_t from_thread, rt_thread_t to_thread)
 {
     if (rt_thread_switch_interrupt_flag == 0)
         rt_interrupt_from_thread = from;

@@ -38,10 +38,12 @@ static void mmu_init(void)
     pwcl = (12UL << MMU_PG_LEVEL_0_BASE_SHIFT) | (width << MMU_PG_LEVEL_0_WIDTH_SHIFT)
           | (21UL << MMU_PG_LEVEL_1_BASE_SHIFT) | (width << MMU_PG_LEVEL_1_WIDTH_SHIFT);
     pwch = (30UL << MMU_PG_LEVEL_3_BASE_SHIFT) | (width << MMU_PG_LEVEL_3_WIDTH_SHIFT);
+
 #ifdef LOONGARCH_HARDWARE_PTW
     RT_ASSERT(read_cpucfg(LOONGARCH_CPUCFG2) & CPUCFG2_PTW);
     pwch |= CSR_PWCTL1_PTW;
 #endif
+    
     /* Writing the complete value also clears a firmware-enabled PTW bit when
      * software refill is selected. This runs separately on every CPU. */
     csr_write64(pwcl, LOONGARCH_CSR_PWCTL0);

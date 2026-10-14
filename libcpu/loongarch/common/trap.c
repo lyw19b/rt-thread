@@ -290,10 +290,12 @@ void do_page_fault(struct pt_regs *regs)
         .fault_vaddr = (void *)regs->r_bvaddr,
         .fault_type = MM_FAULT_TYPE_PAGE_FAULT,
     };
+    
     rt_aspace_t aspace = &rt_kernel_space;
 
     if (regs->r_bvaddr < USER_VADDR_TOP && lwp_self())
         aspace = lwp_self()->aspace;
+    
     switch (code)
     {
     case MMU_STAT_EXCODE_PIL:
@@ -312,14 +314,17 @@ void do_page_fault(struct pt_regs *regs)
     default:
         goto fatal;
     }
+    
     /* Demand paging can sleep. Restore the interrupted context's IRQ state
      * while fixing the fault, then mask again before the exception return. */
     rt_hw_local_irq_enable(regs->r_prmd & CSR_PRMD_PIE);
+    
     if (rt_aspace_fault_try_fix(aspace, &msg))
     {
         rt_hw_local_irq_disable();
         return;
     }
+
 fatal:
     if (user)
     {
@@ -329,6 +334,7 @@ fatal:
         sys_exit_group(-1);
     }
 #endif
+
     rt_kprintf("Kernel page fault: pc=%p address=%p\n",
                (void *)regs->r_era, (void *)regs->r_bvaddr);
     rt_hw_interrupt_disable();

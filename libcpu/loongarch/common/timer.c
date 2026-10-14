@@ -17,9 +17,11 @@ rt_weak void rt_hw_timer_init(void)
 
     RT_ASSERT(base && mult && div);
     interval = base * mult / div / RT_TICK_PER_SECOND;
+    
     /* TCFG stores the interval in bits 63:2. Periodic mode avoids ISR drift. */
     csr_write64((interval & CSR_TCFG_VAL) | CSR_TCFG_PERIOD | CSR_TCFG_EN,
                 LOONGARCH_CSR_TCFG);
+    
     set_csr_ecfg(ECFGF_TIMER);
 }
 
