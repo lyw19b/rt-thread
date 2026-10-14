@@ -10,6 +10,7 @@
 #include "drv_interrupt.h"
 #include "cpuport.h"
 
+static struct rt_spinlock irq_lock;
 static struct rt_irq_desc irq_table[MAX_INTR];
 static rt_uint64_t enabled_irqs;
 static rt_uint32_t irq_polarity[2], irq_edge[2];
@@ -20,12 +21,12 @@ void rt_hw_interrupt_mask(int irq)
 
     if (irq < 0 || irq >= MAX_INTR)
         return;
-    level = rt_hw_interrupt_disable();
+    level = rt_spin_lock_irqsave(&irq_lock);
     enabled_irqs &= ~(1ULL << irq);
     /* SET/CLR registers are write-one operations, never read-modify-write. */
     HWREG32(LS2K_INTENCLR_REG(irq)) = 1U << (irq % 32);
     rt_hw_dmb();
-    rt_hw_interrupt_enable(level);
+    rt_spin_unlock_irqrestore(&irq_lock, level);
 }
 
 void rt_hw_interrupt_umask(int irq)
@@ -34,11 +35,11 @@ void rt_hw_interrupt_umask(int irq)
 
     if (irq < 0 || irq >= MAX_INTR)
         return;
-    level = rt_hw_interrupt_disable();
+    level = rt_spin_lock_irqsave(&irq_lock);
     enabled_irqs |= 1ULL << irq;
     HWREG32(LS2K_INTENSET_REG(irq)) = 1U << (irq % 32);
     rt_hw_dmb();
-    rt_hw_interrupt_enable(level);
+    rt_spin_unlock_irqrestore(&irq_lock, level);
 }
 
 #ifndef RT_USING_NANO
@@ -53,7 +54,7 @@ void liointc_set_irq_mode(int irq, int mode)
         mode != PIN_IRQ_MODE_HIGH_LEVEL && mode != PIN_IRQ_MODE_LOW_LEVEL)
         return;
     bit = 1U << (irq % 32);
-    level = rt_hw_interrupt_disable();
+    level = rt_spin_lock_irqsave(&irq_lock);
     polarity = irq_polarity[irq / 32] & ~bit;
     edge = irq_edge[irq / 32] & ~bit;
     if (mode == PIN_IRQ_MODE_LOW_LEVEL || mode == PIN_IRQ_MODE_FALLING)
@@ -65,7 +66,7 @@ void liointc_set_irq_mode(int irq, int mode)
     HWREG32(LS2K_INTPOL_REG(irq)) = polarity;
     HWREG32(LS2K_INTEDGE_REG(irq)) = edge;
     rt_hw_dmb();
-    rt_hw_interrupt_enable(level);
+    rt_spin_unlock_irqrestore(&irq_lock, level);
 }
 
 #endif
@@ -77,7 +78,7 @@ rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
 
     if (vector >= 0 && vector < MAX_INTR)
     {
-        rt_base_t level = rt_hw_interrupt_disable();
+        rt_base_t level = rt_spin_lock_irqsave(&irq_lock);
         previous = irq_table[vector].handler;
         irq_table[vector].handler = handler;
         irq_table[vector].param = parameter;
@@ -89,7 +90,7 @@ rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
         RT_UNUSED(name);
 #endif
         rt_hw_dmb();
-        rt_hw_interrupt_enable(level);
+        rt_spin_unlock_irqrestore(&irq_lock, level);
     }
     return previous;
 }
@@ -99,15 +100,19 @@ void platform_generic_irq(void)
     rt_uint64_t pending = HWREG32(LS2K_COREISR_REG0(0));
 
     pending |= (rt_uint64_t)HWREG32(LS2K_COREISR_REG1(0)) << 32;
-    pending &= enabled_irqs;
     while (pending)
     {
         unsigned int irq = __builtin_ctzll(pending);
-        struct rt_irq_desc *desc = &irq_table[irq];
+        rt_isr_handler_t handler;
+        void *parameter;
+        rt_base_t level = rt_spin_lock_irqsave(&irq_lock);
 
         pending &= pending - 1;
         if (!(enabled_irqs & (1ULL << irq)))
+        {
+            rt_spin_unlock_irqrestore(&irq_lock, level);
             continue;
+        }
         if (irq_edge[irq / 32] & (1U << (irq % 32)))
         {
             /* Clear the latched edge before dispatch; CLR also masks it. */
@@ -115,15 +120,16 @@ void platform_generic_irq(void)
             HWREG32(LS2K_INTENSET_REG(irq)) = 1U << (irq % 32);
             rt_hw_dmb();
         }
-        /* Do not unconditionally unmask after dispatch: a device ISR may
-         * intentionally leave its interrupt disabled for deferred recovery. */
-        if (desc->handler)
-        {
+        handler = irq_table[irq].handler;
+        parameter = irq_table[irq].param;
 #ifdef RT_USING_INTERRUPT_INFO
-            desc->counter++;
+        if (handler)
+            irq_table[irq].counter++;
 #endif
-            desc->handler(irq, desc->param);
-        }
+        rt_spin_unlock_irqrestore(&irq_lock, level);
+        /* Device handlers may mask their IRQ or acquire their own locks. */
+        if (handler)
+            handler(irq, parameter);
         else
             rt_hw_interrupt_mask(irq);
     }
@@ -133,6 +139,7 @@ void rt_hw_interrupt_init(void)
 {
     unsigned int irq;
 
+    rt_spin_lock_init(&irq_lock);
     ls2k_interrupt_prepare();
     enabled_irqs = 0;
     rt_memset(irq_polarity, 0, sizeof(irq_polarity));

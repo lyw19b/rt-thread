@@ -22,6 +22,9 @@
 static const struct ls2k_uart_config *ports;
 static rt_size_t port_count;
 
+/* Covers DLAB aliases as well as RX/TX accesses from other CPUs. */
+static struct rt_spinlock uart_lock;
+
 static rt_uint8_t _read(const struct ls2k_uart_config *port, unsigned int reg)
 {
     return HWREG8(port->base + reg);
@@ -47,7 +50,7 @@ static rt_err_t _set_format(const struct ls2k_uart_config *port, rt_uint32_t bau
         return -RT_EINVAL;
     /* DLAB aliases the data/IER registers. Keep an RX ISR from accessing
      * the divisor while a thread is changing the serial configuration. */
-    level = rt_hw_interrupt_disable();
+    level = rt_spin_lock_irqsave(&uart_lock);
     interrupts = _read(port, UART_IER);
     _write(port, UART_IER, 0);
     _write(port, UART_LCR, format | UART_DLAB);
@@ -55,15 +58,32 @@ static rt_err_t _set_format(const struct ls2k_uart_config *port, rt_uint32_t bau
     _write(port, UART_IER, divisor >> 8);
     _write(port, UART_LCR, format);
     _write(port, UART_IER, interrupts);
-    rt_hw_interrupt_enable(level);
+    rt_spin_unlock_irqrestore(&uart_lock, level);
     return RT_EOK;
 }
 
 static int _putchar(const struct ls2k_uart_config *port, char c)
 {
-    while (!(_read(port, UART_LSR) & UART_TX)) {}
-    _write(port, UART_DATA, c);
-    return 1;
+    for (;;)
+    {
+        rt_base_t level = rt_spin_lock_irqsave(&uart_lock);
+        if (_read(port, UART_LSR) & UART_TX)
+        {
+            _write(port, UART_DATA, c);
+            rt_spin_unlock_irqrestore(&uart_lock, level);
+            return 1;
+        }
+        rt_spin_unlock_irqrestore(&uart_lock, level);
+    }
+}
+
+static int _getchar(const struct ls2k_uart_config *port)
+{
+    rt_base_t level = rt_spin_lock_irqsave(&uart_lock);
+    int value = (_read(port, UART_LSR) & UART_RX) ? _read(port, UART_DATA) : -1;
+
+    rt_spin_unlock_irqrestore(&uart_lock, level);
+    return value;
 }
 
 #ifdef RT_USING_NANO
@@ -81,8 +101,12 @@ void rt_hw_console_output(const char *str)
 
 char rt_hw_console_getchar(void)
 {
-    if (port_count && (_read(ports, UART_LSR) & UART_RX))
-        return _read(ports, UART_DATA);
+    if (port_count)
+    {
+        int value = _getchar(ports);
+        if (value >= 0)
+            return value;
+    }
     rt_thread_mdelay(1);
     return -1;
 }
@@ -113,11 +137,10 @@ static rt_err_t _control(struct rt_serial_device *serial, int cmd, void *arg)
 
     if ((rt_ubase_t)arg != RT_DEVICE_FLAG_INT_RX)
         return -RT_EINVAL;
-    level = rt_hw_interrupt_disable();
+    level = rt_spin_lock_irqsave(&uart_lock);
     if (cmd == RT_DEVICE_CTRL_SET_INT)
     {
         _write(port, UART_IER, _read(port, UART_IER) | 0x05);
-        rt_hw_interrupt_umask(port->irq);
     }
     else if (cmd == RT_DEVICE_CTRL_CLR_INT)
     {
@@ -126,10 +149,12 @@ static rt_err_t _control(struct rt_serial_device *serial, int cmd, void *arg)
     }
     else
     {
-        rt_hw_interrupt_enable(level);
+        rt_spin_unlock_irqrestore(&uart_lock, level);
         return -RT_ENOSYS;
     }
-    rt_hw_interrupt_enable(level);
+    rt_spin_unlock_irqrestore(&uart_lock, level);
+    if (cmd == RT_DEVICE_CTRL_SET_INT)
+        rt_hw_interrupt_umask(port->irq);
     return RT_EOK;
 }
 
@@ -141,7 +166,7 @@ static int _putc(struct rt_serial_device *serial, char c)
 static int _getc(struct rt_serial_device *serial)
 {
     const struct ls2k_uart_config *port = serial->parent.user_data;
-    return (_read(port, UART_LSR) & UART_RX) ? _read(port, UART_DATA) : -1;
+    return _getchar(port);
 }
 
 static void _irq(int vector, void *parameter)
@@ -154,13 +179,17 @@ static void _irq(int vector, void *parameter)
         unsigned int reason;
         if (ports[i].irq != (unsigned int)vector)
             continue;
+        rt_base_t level = rt_spin_lock_irqsave(&uart_lock);
+        rt_bool_t receive = RT_FALSE;
         reason = _read(&ports[i], UART_IIR) & 0x0f;
         if (reason == 0x04 || reason == 0x0c || reason == 0x06)
         {
             /* Reading LSR acknowledges line errors, even without RX data. */
-            if (_read(&ports[i], UART_LSR) & UART_RX)
-                rt_hw_serial_isr(&serials[i], RT_SERIAL_EVENT_RX_IND);
+            receive = !!(_read(&ports[i], UART_LSR) & UART_RX);
         }
+        rt_spin_unlock_irqrestore(&uart_lock, level);
+        if (receive)
+            rt_hw_serial_isr(&serials[i], RT_SERIAL_EVENT_RX_IND);
     }
 }
 
@@ -178,6 +207,7 @@ void rt_hw_uart_init(void)
     rt_size_t i;
     rt_err_t error;
 
+    rt_spin_lock_init(&uart_lock);
     ports = ls2k_uart_get_config(&port_count);
     RT_ASSERT(ports && port_count && port_count <= 10);
     for (i = 0; i < port_count; i++)

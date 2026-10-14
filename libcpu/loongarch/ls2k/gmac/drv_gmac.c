@@ -26,11 +26,12 @@ struct gmac_device
     struct eth_device parent;
     struct ls2k_gmac mac;
     struct rt_mutex lock;
+    struct rt_spinlock irq_lock;
     rt_ubase_t base;
     rt_uint8_t address[6];
     const char *name;
     int irq, phy_address;
-    volatile rt_bool_t fault;
+    rt_bool_t fault, recovering;
     rt_bool_t initialized, registered;
     rt_uint32_t bus_errors, rx_dropped, recoveries;
 };
@@ -79,25 +80,33 @@ static const struct ls2k_gmac_io gmac_io =
 static void _irq(int vector, void *parameter)
 {
     struct gmac_device *dev = parameter;
-    rt_uint32_t status = _reg_read(dev, GMAC_DMA_STATUS);
+    rt_base_t level = rt_spin_lock_irqsave(&dev->irq_lock);
+    rt_uint32_t status;
+    rt_bool_t notify = RT_FALSE;
 
     RT_UNUSED(vector);
-    _reg_write(dev, GMAC_DMA_STATUS, status & GMAC_DMA_STATUS_W1C);
-    if (status & GMAC_DMA_FATAL)
+    if (!dev->recovering)
     {
-        _reg_write(dev, GMAC_DMA_INT_ENABLE, 0);
-        dev->bus_errors++;
-        dev->fault = RT_TRUE;
-        return;
+        status = _reg_read(dev, GMAC_DMA_STATUS);
+        _reg_write(dev, GMAC_DMA_STATUS, status & GMAC_DMA_STATUS_W1C);
+        if (status & GMAC_DMA_FATAL)
+        {
+            _reg_write(dev, GMAC_DMA_INT_ENABLE, 0);
+            __atomic_fetch_add(&dev->bus_errors, 1, __ATOMIC_RELAXED);
+            __atomic_store_n(&dev->fault, RT_TRUE, __ATOMIC_RELEASE);
+        }
+        else if (status & (GMAC_DMA_RX_DONE | GMAC_DMA_RX_UNAVAILABLE))
+        {
+            rt_uint32_t mask = _reg_read(dev, GMAC_DMA_INT_ENABLE);
+            _reg_write(dev, GMAC_DMA_INT_ENABLE,
+                       mask & ~(GMAC_DMA_RX_DONE | GMAC_DMA_RX_UNAVAILABLE));
+            notify = RT_TRUE;
+        }
     }
-    if (status & (GMAC_DMA_RX_DONE | GMAC_DMA_RX_UNAVAILABLE))
-    {
-        rt_uint32_t mask = _reg_read(dev, GMAC_DMA_INT_ENABLE);
-        _reg_write(dev, GMAC_DMA_INT_ENABLE,
-                   mask & ~(GMAC_DMA_RX_DONE | GMAC_DMA_RX_UNAVAILABLE));
-        /* The service thread retries notification if the lwIP mailbox is full. */
+    rt_spin_unlock_irqrestore(&dev->irq_lock, level);
+    /* Never enter lwIP while holding the register lock. */
+    if (notify)
         eth_device_ready(&dev->parent);
-    }
 }
 
 static void _service(void *parameter)
@@ -115,21 +124,29 @@ static void _service(void *parameter)
         old_link = dev->mac.link;
         old_speed = dev->mac.speed;
         old_duplex = dev->mac.duplex;
-        if (dev->fault)
+        if (__atomic_load_n(&dev->fault, __ATOMIC_ACQUIRE))
         {
+            rt_base_t level = rt_spin_lock_irqsave(&dev->irq_lock);
+            dev->recovering = RT_TRUE;
+            _reg_write(dev, GMAC_DMA_INT_ENABLE, 0);
+            rt_spin_unlock_irqrestore(&dev->irq_lock, level);
             rt_hw_interrupt_mask(dev->irq);
             if (dev->mac.running)
                 dev->mac.tx_errors += dev->mac.tx_pending;
             error = ls2k_gmac_start(&dev->mac, dev->address, dev->phy_address);
+            level = rt_spin_lock_irqsave(&dev->irq_lock);
             if (!error)
             {
-                dev->fault = RT_FALSE;
+                __atomic_store_n(&dev->fault, RT_FALSE, __ATOMIC_RELEASE);
                 dev->recoveries++;
                 _reg_write(dev, GMAC_DMA_INT_ENABLE, GMAC_DMA_IRQ_MASK);
-                rt_hw_interrupt_umask(dev->irq);
             }
+            dev->recovering = RT_FALSE;
+            rt_spin_unlock_irqrestore(&dev->irq_lock, level);
+            if (!error)
+                rt_hw_interrupt_umask(dev->irq);
         }
-        if (!dev->fault)
+        if (!__atomic_load_n(&dev->fault, __ATOMIC_ACQUIRE))
         {
             ls2k_gmac_poll_link(&dev->mac);
             ls2k_gmac_reclaim_tx(&dev->mac);
@@ -212,7 +229,7 @@ static rt_err_t _transmit(rt_device_t device, struct pbuf *packet)
     for (;;)
     {
         rt_mutex_take(&dev->lock, RT_WAITING_FOREVER);
-        if (!dev->mac.link || dev->fault)
+        if (!dev->mac.link || __atomic_load_n(&dev->fault, __ATOMIC_ACQUIRE))
         {
             rt_mutex_release(&dev->lock);
             return -RT_ERROR;
@@ -240,7 +257,7 @@ static struct pbuf *_receive(rt_device_t device)
     unsigned int budget = BSP_GMAC_RING_SIZE;
 
     rt_mutex_take(&dev->lock, RT_WAITING_FOREVER);
-    if (dev->fault || !dev->mac.running)
+    if (__atomic_load_n(&dev->fault, __ATOMIC_ACQUIRE) || !dev->mac.running)
         goto out;
     while (budget--)
     {
@@ -274,12 +291,12 @@ static struct pbuf *_receive(rt_device_t device)
     /* Re-enable before the final ownership check: a frame arriving during
      * drain must either trigger an IRQ or be explicitly queued below. */
     {
-        rt_base_t level = rt_hw_interrupt_disable();
-        if (!dev->fault)
+        rt_base_t level = rt_spin_lock_irqsave(&dev->irq_lock);
+        if (!__atomic_load_n(&dev->fault, __ATOMIC_ACQUIRE))
             _reg_write(dev, GMAC_DMA_INT_ENABLE, GMAC_DMA_IRQ_MASK);
+        rt_spin_unlock_irqrestore(&dev->irq_lock, level);
         if (!(dev->mac.rx.desc[dev->mac.rx_head].status & GMAC_DESC_OWN))
             eth_device_ready(&dev->parent);
-        rt_hw_interrupt_enable(level);
     }
 out:
     rt_mutex_release(&dev->lock);
@@ -371,6 +388,7 @@ static int _register_port(struct gmac_device *dev, struct gmac_dma_memory *stora
     dev->mac.rx = (struct ls2k_gmac_ring){dma->rx, &dma->rx_buffers[0][0],
         LS2K_PHYSICAL(dma->rx), LS2K_PHYSICAL(dma->rx_buffers), BSP_GMAC_RING_SIZE};
     rt_mutex_init(&dev->lock, dev->name, RT_IPC_FLAG_PRIO);
+    rt_spin_lock_init(&dev->irq_lock);
     dev->parent.parent.ops = &device_ops;
     dev->parent.eth_rx = _receive;
     dev->parent.eth_tx = _transmit;
@@ -415,7 +433,7 @@ static void _show_status(struct gmac_device *dev)
                "txerr=%llu rxerr=%llu drop=%u buserr=%u recover=%u\n",
                dev->name, dev->mac.phy, dev->mac.link, dev->mac.speed, dev->mac.duplex,
                dev->mac.tx_packets, dev->mac.rx_packets, dev->mac.tx_errors,
-               dev->mac.rx_errors, dev->rx_dropped, dev->bus_errors, dev->recoveries);
+               dev->mac.rx_errors, dev->rx_dropped, __atomic_load_n(&dev->bus_errors, __ATOMIC_RELAXED), dev->recoveries);
     rt_mutex_release(&dev->lock);
 }
 

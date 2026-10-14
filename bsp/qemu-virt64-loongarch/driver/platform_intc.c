@@ -25,6 +25,7 @@
 #define PIC_VECTOR          0x200
 #define PIC_VECTORS         64
 
+static struct rt_spinlock irq_lock;
 static struct rt_irq_desc irq_table[EIOINTC_VECTORS];
 
 static volatile rt_uint32_t *pic_reg(unsigned int offset)
@@ -37,6 +38,7 @@ void platform_irq_init(void)
     unsigned int i;
     rt_uint64_t misc = iocsr_read64(LOONGARCH_IOCSR_MISC_FUNC);
 
+    rt_spin_lock_init(&irq_lock);
     iocsr_write64(misc | IOCSR_MISC_FUNC_EXT_IOI_EN, LOONGARCH_IOCSR_MISC_FUNC);
     for (i = 0; i < EIOINTC_VECTORS / 32; i++)
     {
@@ -68,9 +70,9 @@ void rt_hw_interrupt_mask(int vector)
 {
     if (vector >= 0 && vector < PIC_VECTORS)
     {
-        rt_base_t level = rt_hw_interrupt_disable();
+        rt_base_t level = rt_spin_lock_irqsave(&irq_lock);
         *pic_reg(PIC_MASK + vector / 32 * 4) |= 1U << (vector % 32);
-        rt_hw_interrupt_enable(level);
+        rt_spin_unlock_irqrestore(&irq_lock, level);
     }
 }
 
@@ -78,9 +80,9 @@ void rt_hw_interrupt_umask(int vector)
 {
     if (vector >= 0 && vector < PIC_VECTORS)
     {
-        rt_base_t level = rt_hw_interrupt_disable();
+        rt_base_t level = rt_spin_lock_irqsave(&irq_lock);
         *pic_reg(PIC_MASK + vector / 32 * 4) &= ~(1U << (vector % 32));
-        rt_hw_interrupt_enable(level);
+        rt_spin_unlock_irqrestore(&irq_lock, level);
     }
 }
 
@@ -91,7 +93,7 @@ rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
 
     if (vector >= 0 && vector < EIOINTC_VECTORS)
     {
-        rt_base_t level = rt_hw_interrupt_disable();
+        rt_base_t level = rt_spin_lock_irqsave(&irq_lock);
         previous = irq_table[vector].handler;
         irq_table[vector].handler = handler;
         irq_table[vector].param = param;
@@ -99,7 +101,7 @@ rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
         rt_strncpy(irq_table[vector].name, name ? name : "", RT_NAME_MAX - 1);
         irq_table[vector].counter = 0;
 #endif
-        rt_hw_interrupt_enable(level);
+        rt_spin_unlock_irqrestore(&irq_lock, level);
     }
     return previous;
 }
@@ -116,14 +118,16 @@ void platform_generic_irq(void)
         {
             unsigned int bit = __builtin_ctzl(pending);
             unsigned int vector = i * 64 + bit;
-            struct rt_irq_desc *desc = &irq_table[vector];
-            if (desc->handler)
-            {
+            rt_base_t level = rt_spin_lock_irqsave(&irq_lock);
+            rt_isr_handler_t handler = irq_table[vector].handler;
+            void *parameter = irq_table[vector].param;
 #ifdef RT_USING_INTERRUPT_INFO
-                desc->counter++;
+            if (handler)
+                irq_table[vector].counter++;
 #endif
-                desc->handler(vector, desc->param);
-            }
+            rt_spin_unlock_irqrestore(&irq_lock, level);
+            if (handler)
+                handler(vector, parameter);
             pending &= pending - 1;
         }
     }
