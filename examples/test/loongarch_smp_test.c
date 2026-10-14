@@ -248,6 +248,7 @@ static struct
     unsigned int phase[RT_CPUS_NR];
     unsigned int slot[RT_CPUS_NR];
     unsigned int start;
+    unsigned int ready;
     unsigned int rounds;
 } tlb_test;
 
@@ -269,6 +270,11 @@ static void tlb_worker(void *parameter)
 
     while (!__atomic_load_n(&tlb_test.start, __ATOMIC_ACQUIRE))
         rt_thread_mdelay(1);
+    /* CPU 0 drives delayed wakeups. Keep its timer running until every worker
+     * has left the sleep above, before entering the IRQ-masked test phase. */
+    __atomic_fetch_or(&tlb_test.ready, 1U << cpu, __ATOMIC_RELEASE);
+    while (__atomic_load_n(&tlb_test.ready, __ATOMIC_ACQUIRE) != (1U << RT_CPUS_NR) - 1)
+        rt_thread_yield();
     level = rt_hw_local_irq_disable();
     /* Alternate concurrent updates with a single writer. Non-writers must
      * invalidate through shootdown, without a local map or context switch
