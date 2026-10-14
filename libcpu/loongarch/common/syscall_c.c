@@ -23,9 +23,9 @@ void rt_dispatch_syscall(struct pt_regs *regs)
     if (!(regs->r_prmd & 3))
     {
         extern rt_base_t loongarch_kernel_syscall(struct pt_regs *regs);
-        rt_hw_interrupt_enable(4);
+        rt_hw_local_irq_enable(4);
         regs->r_a0 = loongarch_kernel_syscall(regs);
-        rt_hw_interrupt_disable();
+        rt_hw_local_irq_disable();
         regs->r_era += 4;
         return;
     }
@@ -38,10 +38,10 @@ void rt_dispatch_syscall(struct pt_regs *regs)
     }
     call = (loongarch_syscall_t)lwp_get_sys_api(regs->r_a7);
     /* Keep ERA at the syscall until fork has copied the parent's frame. */
-    rt_hw_interrupt_enable(4);
+    rt_hw_local_irq_enable(4);
     regs->r_a0 = call ? call(regs->r_a0, regs->r_a1, regs->r_a2,
         regs->r_a3, regs->r_a4, regs->r_a5, regs->r_a6) : -ENOSYS;
-    rt_hw_interrupt_disable();
+    rt_hw_local_irq_disable();
     regs->r_tp = (rt_ubase_t)thread->thread_idr;
     regs->r_era += 4;
 }
@@ -50,9 +50,9 @@ void rt_dispatch_syscall(struct pt_regs *regs)
 {
 #ifdef RT_USING_DFS
     extern rt_base_t loongarch_kernel_syscall(struct pt_regs *regs);
-    rt_hw_interrupt_enable(4);
+    rt_hw_local_irq_enable(4);
     regs->r_a0 = loongarch_kernel_syscall(regs);
-    rt_hw_interrupt_disable();
+    rt_hw_local_irq_disable();
 #else
     regs->r_a0 = -RT_ENOSYS;
 #endif

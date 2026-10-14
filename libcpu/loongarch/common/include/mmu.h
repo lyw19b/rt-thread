@@ -131,6 +131,12 @@ rt_inline void rt_hw_tlb_invalidate_all_local(void)
     __asm__ volatile("invtlb 0x0, $zero, $zero" ::: "memory");
 }
 
+#ifdef RT_USING_SMP
+void loongarch_tlb_flush_all(void);
+#else
+#define loongarch_tlb_flush_all rt_hw_tlb_invalidate_all_local
+#endif
+
 rt_inline void rt_hw_tlb_invalidate_range(rt_aspace_t aspace, void *start,
                                         size_t size, size_t stride)
 {
@@ -138,7 +144,7 @@ rt_inline void rt_hw_tlb_invalidate_range(rt_aspace_t aspace, void *start,
     RT_UNUSED(start);
     RT_UNUSED(size);
     RT_UNUSED(stride);
-    __asm__ volatile("invtlb 0x0, $zero, $zero" ::: "memory");
+    loongarch_tlb_flush_all();
 }
 
 // MMU related functions.

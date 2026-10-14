@@ -10,7 +10,7 @@
 #include "loongarch.h"
 
 rt_align(ARCH_PAGE_SIZE) rt_ubase_t MMUTable[512];
-static void *current_mmu_table;
+static void *current_mmu_table[RT_CPUS_NR];
 
 static rt_ubase_t *table_from_entry(rt_ubase_t entry)
 {
@@ -72,14 +72,14 @@ static size_t unmap_page(rt_aspace_t aspace, rt_ubase_t va)
         if (table_empty(leaf))
         {
             mid[j] = 0;
-            rt_hw_tlb_invalidate_all_local();
+            loongarch_tlb_flush_all();
             rt_pages_free(leaf, 0);
         }
     }
     if (table_empty(mid))
     {
         root[i] = 0;
-        rt_hw_tlb_invalidate_all_local();
+        loongarch_tlb_flush_all();
         rt_pages_free(mid, 0);
     }
     return ARCH_PAGE_SIZE;
@@ -107,6 +107,7 @@ void *rt_hw_mmu_map(rt_aspace_t aspace, void *vaddr, void *paddr,
                 done -= ARCH_PAGE_SIZE;
                 unmap_page(aspace, va + done);
             }
+            loongarch_tlb_flush_all();
             MM_PGTBL_UNLOCK(aspace);
             return RT_NULL;
         }
@@ -116,7 +117,7 @@ void *rt_hw_mmu_map(rt_aspace_t aspace, void *vaddr, void *paddr,
             *pte |= MMU_PAGE_DIRTY;
     }
     __asm__ volatile("dbar 0" ::: "memory");
-    rt_hw_tlb_invalidate_all_local();
+    loongarch_tlb_flush_all();
     MM_PGTBL_UNLOCK(aspace);
     return vaddr;
 }
@@ -128,7 +129,7 @@ void rt_hw_mmu_unmap(rt_aspace_t aspace, void *vaddr, size_t size)
     /* Large user reservations are sparse: skip absent page-table subtrees. */
     for (offset = 0; offset < size;)
         offset += unmap_page(aspace, (rt_ubase_t)vaddr + offset);
-    rt_hw_tlb_invalidate_all_local();
+    loongarch_tlb_flush_all();
     MM_PGTBL_UNLOCK(aspace);
 }
 
@@ -148,14 +149,14 @@ void *rt_hw_mmu_v2p(rt_aspace_t aspace, void *vaddr)
 void rt_hw_aspace_switch(rt_aspace_t aspace)
 {
     rt_ubase_t pa = ARCH_PAGE_PA_MASK(aspace->page_table);
-    current_mmu_table = aspace->page_table;
+    current_mmu_table[rt_hw_cpu_id()] = aspace->page_table;
     csr_write64(pa, LOONGARCH_CSR_PGDL);
     rt_hw_tlb_invalidate_all_local();
 }
 
 void *rt_hw_mmu_tbl_get(void)
 {
-    return current_mmu_table;
+    return current_mmu_table[rt_hw_cpu_id()];
 }
 
 int rt_hw_mmu_map_init(rt_aspace_t aspace, void *vaddr, rt_ubase_t size,
@@ -207,7 +208,7 @@ int rt_hw_mmu_control(rt_aspace_t aspace, void *vaddr, size_t size,
                 *pte |= MMU_CACHE_CC;
         }
     }
-    rt_hw_tlb_invalidate_all_local();
+    loongarch_tlb_flush_all();
     MM_PGTBL_UNLOCK(aspace);
     return RT_EOK;
 }

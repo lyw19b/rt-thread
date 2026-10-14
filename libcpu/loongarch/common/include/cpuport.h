@@ -11,8 +11,25 @@
 #ifndef __ASM_CPUPORT_H__
 #define __ASM_CPUPORT_H__
 
+#include <rtconfig.h>
+
+#ifdef RT_USING_SMP
+typedef struct
+{
+    unsigned int value;
+} rt_hw_spinlock_t;
+#endif
+
 #include <rttypes.h>
 #include <rtcompiler.h>
+
+#ifdef RT_USING_SMP
+void loongarch_ipi_handler(void);
+void loongarch_tlb_poll(void);
+unsigned int loongarch_cpu_online_mask(void);
+#endif
+
+void init_cpu_early(void);
 
 void trap_init(void);
 void init_smp(void);

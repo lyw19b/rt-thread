@@ -15,6 +15,11 @@
 #include "asm-generic.h"
 #include "stackframe.h"
 
+#ifdef RT_USING_SMP
+#define rt_hw_interrupt_enable rt_hw_local_irq_enable
+#define rt_hw_interrupt_disable rt_hw_local_irq_disable
+#endif
+
 .macro  build_prep_badv
     csrrd     t0, LOONGARCH_CSR_BADV
     LONG_ST   t0, sp, PT_BVADDR
@@ -52,6 +57,10 @@ _666_\exception:
 */
 START_POINT(ret_from_exception)
 ret_from_exception:
+#ifdef RT_USING_SMP
+    move a0, sp
+    bl rt_scheduler_do_irq_switch
+#else
     la.abs  t0, rt_thread_switch_interrupt_flag
     LONG_LD t1, t0, 0
     beqz    t1, exception_resume /*resume exec*/
@@ -69,6 +78,7 @@ exception_context_switch:/*context_switch*/
     jirl    ra, t0, 0
 
 exception_resume:/*resume exec*/
+#endif
 #ifdef RT_USING_SMART
     LONG_LD t0, sp, PT_PRMD
     andi    t0, t0, 0x3 /* extract pplv bit */

@@ -33,13 +33,17 @@ rt_hw_context_switch:
     LONG_ST  sp, a0, 0
 
     LONG_LD  sp, a1, 0
-    move     t0, sp
-
-    bl  rt_thread_self
-
+#ifdef RT_USING_SMP
+    move a0, a2
+    bl rt_cpus_lock_status_restore
+#else
 #ifdef RT_USING_SMART
-    bl  lwp_aspace_switch
-    bl  loongarch_set_kernel_stack
+    bl rt_thread_self
+    bl lwp_aspace_switch
+#endif
+#endif
+#ifdef RT_USING_SMART
+    bl loongarch_set_kernel_stack
 #endif
     # csrrd t0, LOONGARCH_CSR_CRMD
     restore_switch_fpu
@@ -58,13 +62,17 @@ rt_hw_context_switch:
 .global rt_hw_context_switch_to
 rt_hw_context_switch_to:
     LONG_LD  sp, a0, 0
-    move     t0, sp
-
-    bl  rt_thread_self
-
+#ifdef RT_USING_SMP
+    move a0, a1
+    bl rt_cpus_lock_status_restore
+#else
 #ifdef RT_USING_SMART
-    bl  lwp_aspace_switch
-    bl  loongarch_set_kernel_stack
+    bl rt_thread_self
+    bl lwp_aspace_switch
+#endif
+#endif
+#ifdef RT_USING_SMART
+    bl loongarch_set_kernel_stack
 #endif
     # csrrd t0, LOONGARCH_CSR_CRMD
     restore_switch_fpu

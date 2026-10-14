@@ -261,6 +261,7 @@ config ARCH_LOONGARCH_SIMD
     bool
 
 config ARCH_LOONGARCH64
+    select RT_USING_STDC_ATOMIC if RT_USING_SMP
     select ARCH_LOONGARCH
     select ARCH_CPU_64BIT
     bool

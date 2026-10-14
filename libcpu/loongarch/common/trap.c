@@ -243,7 +243,11 @@ void do_rt_dispatch_trap(struct pt_regs *regs)
         rt_kprintf("---------- Enter Interrupt ----------\n");
         rt_kprintf("      IPI Exception occurred!        \n");
 #endif
-        while (1);
+#ifdef RT_USING_SMP
+        rt_interrupt_enter();
+        loongarch_ipi_handler();
+        rt_interrupt_leave();
+#endif
     } else if ((estat & CSR_ESTAT_IS_TI))
     {
 #if DEBUG_TRAP_TRACE
@@ -343,8 +347,11 @@ static void setup_vint_size(unsigned int size)
 
 static void configure_exception_vector(void)
 {
-    eentry    = (unsigned long)exception_handlers;
-    tlbrentry = (unsigned long)exception_handlers + 80*VECSIZE;
+    if (rt_hw_cpu_id() == 0)
+    {
+        eentry    = (unsigned long)exception_handlers;
+        tlbrentry = (unsigned long)exception_handlers + 80*VECSIZE;
+    }
 
     csr_write64(eentry, LOONGARCH_CSR_EENTRY);
     csr_write64(eentry, LOONGARCH_CSR_MERRENTRY);
@@ -370,6 +377,14 @@ void trap_init(void)
     setup_vint_size(7);
 
     configure_exception_vector();
+
+    /* The boot CPU publishes the shared vector image before starting peers. */
+    if (rt_hw_cpu_id() != 0)
+    {
+        __asm__ volatile("ibar 0" ::: "memory");
+        set_csr_ecfg(ECFGF_IPI);
+        return;
+    }
 
     // copy exception handler to exception vector
 
