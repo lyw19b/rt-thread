@@ -7,6 +7,7 @@
 #include <netif/ethernetif.h>
 #include <lwip/pbuf.h>
 #include "ls2k.h"
+#include "ls2k_gmac_platform.h"
 #include "gmac.h"
 
 #define DBG_TAG "ls2k.gmac"

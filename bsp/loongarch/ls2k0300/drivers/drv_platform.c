@@ -4,6 +4,7 @@
  */
 #include <rthw.h>
 #include "ls2k.h"
+#include "ls2k_gmac_platform.h"
 #include "ls2k_uart.h"
 #include "ls2k0300.h"
 #include "drv_interrupt.h"

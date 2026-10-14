@@ -48,7 +48,7 @@ void rt_thread_mdelay(int ms)
 
 #include "../../libcpu/loongarch/ls2k/drv_interrupt.c"
 #define RT_USING_NANO
-#include "../../libcpu/loongarch/ls2k/drv_uart.c"
+#include "../../bsp/loongarch/common/drv_uart.c"
 #ifdef TEST_LS2K1000
 #include "../../bsp/loongarch/ls2kdev/drivers/drv_uart_config.c"
 #else

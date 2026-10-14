@@ -13,7 +13,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 BSP = ROOT / "bsp/loongarch/ls2kdev"
-DRIVER = ROOT / "libcpu/loongarch/ls2k/gmac"
+DRIVER = ROOT / "bsp/loongarch/common/gmac"
 
 
 def run(command, **kwargs):

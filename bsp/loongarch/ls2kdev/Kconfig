@@ -36,7 +36,7 @@ config RT_USING_UART4
     default y
 endif
 
-source "$(RTT_DIR)/libcpu/loongarch/ls2k/gmac/Kconfig"
+source "$(RTT_DIR)/bsp/loongarch/common/gmac/Kconfig"
 
 config BSP_USING_SELFTEST
     bool "Build kernel port regression and stress commands"

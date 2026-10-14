@@ -1,6 +1,10 @@
 from building import *
+Import('RTT_ROOT')
 
 group = []
 group += SConscript('drivers/SConscript')
 group += SConscript('applications/SConscript')
+# Compile shared drivers into this BSP's own build directory.
+group += SConscript(os.path.join(RTT_ROOT, 'bsp/loongarch/common/SConscript'),
+                    variant_dir='common', duplicate=0)
 Return('group')

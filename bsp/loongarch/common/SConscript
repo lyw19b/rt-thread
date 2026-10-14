@@ -1,0 +1,8 @@
+from building import *
+
+# rtatomic.h returns C11 atomic typedefs; GCC warns about their qualifiers.
+cwd = GetCurrentDir()
+group = DefineGroup('LS2K UART', ['drv_uart.c'], depend=[''], CPPPATH=[cwd],
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+group = group + SConscript('gmac/SConscript')
+Return('group')

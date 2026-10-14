@@ -2,7 +2,7 @@
  * Copyright (c) 2026, RT-Thread Development Team
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "ls2k.h"
+#include "ls2k_gmac_platform.h"
 #include "drv_pci.h"
 #include "drv_interrupt.h"
 

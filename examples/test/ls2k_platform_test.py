@@ -78,6 +78,7 @@ void *test_mmio(uintptr_t address);
                        "-fno-omit-frame-pointer", *flags, "-I", str(output),
                        "-I", str(ROOT / "bsp/loongarch" / board / "drivers"),
                        "-I", str(ROOT / "libcpu/loongarch/ls2k"),
+                       "-I", str(ROOT / "bsp/loongarch/common"),
                        str(ROOT / "examples/test/ls2k_platform_test.c"), "-o", str(executable)]
             subprocess.run(command, check=True)
             print(f"{board}:", flush=True)

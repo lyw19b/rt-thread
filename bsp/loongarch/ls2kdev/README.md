@@ -35,14 +35,17 @@ PHY 使用 Clause 22 MDIO，支持自动协商和链路轮询。驱动保留固�
 
 ## 实现边界
 
-- `libcpu/loongarch/ls2k/gmac/gmac.h`：寄存器和描述符定义、核心接口。
-- `libcpu/loongarch/ls2k/gmac/gmac.c`：MDIO、PHY、MAC 初始化、描述符所有权和环索引，不依赖 lwIP。
-- `libcpu/loongarch/ls2k/gmac/drv_gmac.c`：RT-Thread 设备注册、pbuf 转换、同步、中断通知、链路检查和总线错误恢复。
+- `bsp/loongarch/common/gmac/gmac.h`：寄存器和描述符定义、核心接口。
+- `bsp/loongarch/common/gmac/gmac.c`：MDIO、PHY、MAC 初始化、描述符所有权和环索引，不依赖 lwIP。
+- `bsp/loongarch/common/gmac/drv_gmac.c`：RT-Thread 设备注册、pbuf 转换、同步、中断通知、链路检查和总线错误恢复。
+- `bsp/loongarch/common/ls2k_gmac_platform.h`：板级 GMAC 资源和 DMA 地址范围接口。
 - `drivers/drv_gmac_platform.c`：板级 GMAC 资源获取与 DMA 地址范围。
 - `drivers/drv_pci.c`：2K1000LA 的 BAR 检查和 PCI 命令。
 - `libcpu/loongarch/ls2k/drv_interrupt.c`：两款芯片共用的传统 LIOINTC 驱动，包含边沿确认、屏蔽和分发。
-- `libcpu/loongarch/ls2k/drv_uart.c`：共用串口驱动，Nano 使用轮询，标准版和 Smart 使用 serial v1；共用 IRQ 时逐个检查已注册串口。
+- `bsp/loongarch/common/drv_uart.c`：共用串口驱动，Nano 使用轮询，标准版和 Smart 使用 serial v1；共用 IRQ 时逐个检查已注册串口。
 - `bsp/loongarch/common`：共用构建入口、工具链参数、内核 libc 映射和链接段布局；各 BSP 仅保留加载地址、次核栈大小和镜像名称。
+
+UART 和 GMAC 由两个 BSP 的 `SConscript` 引入，目标文件分别放在各 BSP 的 `build/common` 下。`libcpu/loongarch/ls2k` 仅保留 LIOINTC 和 CPU 物理地址/非缓存地址转换定义。
 
 DMA 使用链接脚本保留的 `.gmac_dma` 区域。它不属于 `.bss` 清零区或堆，也不由 ELF 加载段初始化；驱动只通过非缓存别名访问它。描述符和数据的物理地址必须处于 32 位 DMA 窗口。写入描述符字段和帧数据后，先执行屏障，再交出 OWN；接收时先取得所有权，再读取帧。
 
