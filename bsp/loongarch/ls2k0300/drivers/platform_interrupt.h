@@ -2,8 +2,8 @@
  * Copyright (c) 2026, RT-Thread Development Team
  * SPDX-License-Identifier: Apache-2.0
  */
-#ifndef LS2K0300_INTERRUPT_H__
-#define LS2K0300_INTERRUPT_H__
+#ifndef LS2K0300_PLATFORM_INTERRUPT_H__
+#define LS2K0300_PLATFORM_INTERRUPT_H__
 
 /* Processor User Manual V1.1, section 3.5, traditional 64-source routing. */
 #define MAX_INTR                   64

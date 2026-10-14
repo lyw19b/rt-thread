@@ -8,7 +8,7 @@
 #include "board.h"
 #include "loongarch.h"
 #include "drv_uart.h"
-#include "drv_interrupt.h"
+#include "platform_interrupt.h"
 #include "drv_timer.h"
 #include "drv_power.h"
 #include "timer.h"

@@ -41,7 +41,7 @@ PHY 使用 Clause 22 MDIO，支持自动协商和链路轮询。驱动保留固�
 - `bsp/loongarch/common/ls2k_gmac_platform.h`：板级 GMAC 资源和 DMA 地址范围接口。
 - `drivers/drv_gmac_platform.c`：板级 GMAC 资源获取与 DMA 地址范围。
 - `drivers/drv_pci.c`：2K1000LA 的 BAR 检查和 PCI 命令。
-- `libcpu/loongarch/ls2k/drv_interrupt.c`：两款芯片共用的传统 LIOINTC 驱动，包含边沿确认、屏蔽和分发。
+- `libcpu/loongarch/ls2k/platform_interrupt.c`：两款芯片共用的传统 LIOINTC 驱动，包含边沿确认、屏蔽和分发。
 - `bsp/loongarch/common/drv_uart.c`：共用串口驱动，Nano 使用轮询，标准版和 Smart 使用 serial v1；共用 IRQ 时逐个检查已注册串口。
 - `bsp/loongarch/common`：共用构建入口、工具链参数、内核 libc 映射和链接段布局；各 BSP 仅保留加载地址、次核栈大小和镜像名称。
 

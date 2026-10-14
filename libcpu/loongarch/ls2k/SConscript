@@ -2,6 +2,6 @@ from building import *
 
 # rtatomic.h returns C11 atomic typedefs; GCC warns about their qualifiers.
 cwd = GetCurrentDir()
-group = DefineGroup('LS2K interrupts', ['drv_interrupt.c'], depend=[''], CPPPATH=[cwd],
+group = DefineGroup('LS2K interrupts', ['platform_interrupt.c'], depend=[''], CPPPATH=[cwd],
                     LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
 Return('group')

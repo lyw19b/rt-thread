@@ -5,7 +5,7 @@
 #include <rthw.h>
 #include <rtthread.h>
 #include "board.h"
-#include "drv_interrupt.h"
+#include "platform_interrupt.h"
 #include "ls2k_uart.h"
 #include "timer.h"
 #ifdef RT_USING_SMART

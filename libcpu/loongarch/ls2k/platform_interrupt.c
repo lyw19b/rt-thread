@@ -7,7 +7,7 @@
 #ifndef RT_USING_NANO
 #include <drivers/dev_pin.h>
 #endif
-#include "drv_interrupt.h"
+#include "platform_interrupt.h"
 #include "cpuport.h"
 
 static struct rt_spinlock irq_lock;

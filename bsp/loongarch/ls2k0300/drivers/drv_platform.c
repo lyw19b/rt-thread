@@ -7,7 +7,7 @@
 #include "ls2k_gmac_platform.h"
 #include "ls2k_uart.h"
 #include "ls2k0300.h"
-#include "drv_interrupt.h"
+#include "platform_interrupt.h"
 
 void ls2k_interrupt_prepare(void)
 {

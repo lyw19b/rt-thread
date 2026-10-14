@@ -1,5 +1,5 @@
-#ifndef __LS2K_INTERRUPT_H__
-#define __LS2K_INTERRUPT_H__
+#ifndef __LS2K_PLATFORM_INTERRUPT_H__
+#define __LS2K_PLATFORM_INTERRUPT_H__
 
 #include <loongarch.h>
 #include <ls2k1000la.h>
@@ -72,4 +72,4 @@ static inline void ls2k_interrupt_prepare(void)
 void liointc_set_irq_mode(int irq, int mode);
 void rt_hw_interrupt_init(void);
 
-#endif // __LS2K_INTERRUPT_H__
+#endif // __LS2K_PLATFORM_INTERRUPT_H__

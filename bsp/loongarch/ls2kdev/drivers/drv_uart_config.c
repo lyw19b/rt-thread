@@ -4,7 +4,7 @@
  */
 #include "ls2k_uart.h"
 #include "ls2k1000la.h"
-#include "drv_interrupt.h"
+#include "platform_interrupt.h"
 
 const struct ls2k_uart_config *ls2k_uart_get_config(rt_size_t *count)
 {

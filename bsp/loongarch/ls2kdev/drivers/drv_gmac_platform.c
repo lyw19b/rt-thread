@@ -4,7 +4,7 @@
  */
 #include "ls2k_gmac_platform.h"
 #include "drv_pci.h"
-#include "drv_interrupt.h"
+#include "platform_interrupt.h"
 
 rt_err_t ls2k_gmac_platform_init(unsigned int port, rt_ubase_t *base, int *irq)
 {

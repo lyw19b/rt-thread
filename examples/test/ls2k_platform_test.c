@@ -46,7 +46,7 @@ void rt_thread_mdelay(int ms)
     delay_count++;
 }
 
-#include "../../libcpu/loongarch/ls2k/drv_interrupt.c"
+#include "../../libcpu/loongarch/ls2k/platform_interrupt.c"
 #define RT_USING_NANO
 #include "../../bsp/loongarch/common/drv_uart.c"
 #ifdef TEST_LS2K1000
