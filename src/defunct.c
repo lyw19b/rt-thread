@@ -84,6 +84,26 @@ void rt_defunct_execute(void)
             break;
         }
 
+#ifdef RT_USING_SMP
+        /* Enqueue can wake the reaper on another CPU before the dying thread
+         * has switched stacks. The scheduler lock also covers the final
+         * context save, so observing DETACHED under it permits reclamation. */
+        while (1)
+        {
+            rt_sched_lock_level_t slvl;
+            rt_uint8_t cpu;
+
+            rt_sched_lock(&slvl);
+            cpu = RT_SCHED_CTX(thread).oncpu;
+            if (cpu != RT_CPU_DETACHED)
+                rt_hw_ipi_send(RT_SCHEDULE_IPI, 1U << cpu);
+            rt_sched_unlock(slvl);
+            if (cpu == RT_CPU_DETACHED)
+                break;
+            rt_thread_mdelay(1);
+        }
+#endif
+
 #ifdef RT_USING_MODULE
         module = (struct rt_dlmodule *)thread->parent.module_id;
         if (module)

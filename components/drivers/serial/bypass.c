@@ -223,7 +223,7 @@ static void rt_lower_work(struct rt_work* work, void* work_data)
 
     RT_ASSERT(serial != RT_NULL);
 
-    _lower_work(serial);
+    rt_bypass_work_straight(serial);
 }
 
 rt_err_t rt_bypass_lower_register(struct rt_serial_device* serial, const char* name, rt_uint8_t level, bypass_function_t func, void* data)
@@ -248,21 +248,26 @@ rt_err_t rt_bypass_lower_register(struct rt_serial_device* serial, const char* n
 
 void rt_bypass_work_straight(struct rt_serial_device* serial)
 {
-    if (serial->bypass && serial->bypass->lower_h)
+    /* The reader and deferred worker can drain the same RX FIFO on different
+     * CPUs. Serialize dequeue through callback delivery, not just each FIFO
+     * read, or two characters may reach the line discipline in reverse order.
+     * This mutex is recursive: callbacks may use the bypass pipe helpers. */
+    rt_mutex_take(serial->bypass->mutex, RT_WAITING_FOREVER);
+    if (serial->bypass->lower_h)
     {
         _lower_work(serial);
-        return;
     }
-
-    while (1)
+    else
     {
-        char ch;
-        if (_bypass_getchar_form_serial_fifo(serial, &ch))
-            return;
-
-        rt_bypass_putchar(serial, ch);
+        while (1)
+        {
+            char ch;
+            if (_bypass_getchar_form_serial_fifo(serial, &ch))
+                break;
+            rt_bypass_putchar(serial, ch);
+        }
     }
-
+    rt_mutex_release(serial->bypass->mutex);
 }
 
 rt_err_t rt_bypass_unregister(struct rt_serial_bypass_head* bypass, rt_uint8_t level)

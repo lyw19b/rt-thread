@@ -736,8 +736,26 @@ static void test_timer_stress(void)
     LOG_I("success after %lu iterations", iters);
 }
 
+#ifdef RT_USING_SMP
+static rt_uint8_t saved_affinity, saved_timer_affinity;
+static rt_thread_t soft_timer_thread;
+#endif
+
 static rt_err_t utest_tc_init(void)
 {
+#ifdef RT_USING_SMP
+    /* These callback-order tests share state with hard and soft timers. Run
+     * their controller on the tick CPU and serialize soft callbacks there. */
+    saved_affinity = RT_SCHED_CTX(rt_thread_self()).bind_cpu;
+    rt_thread_control(rt_thread_self(), RT_THREAD_CTRL_BIND_CPU, (void *)0);
+    soft_timer_thread = rt_thread_find("timer");
+    if (soft_timer_thread)
+    {
+        saved_timer_affinity = RT_SCHED_CTX(soft_timer_thread).bind_cpu;
+        rt_thread_control(soft_timer_thread, RT_THREAD_CTRL_BIND_CPU, (void *)0);
+    }
+    rt_thread_mdelay(1);
+#endif
     timer.dynamic_timer = RT_NULL;
     timer.callbacks = 0;
 
@@ -746,6 +764,13 @@ static rt_err_t utest_tc_init(void)
 
 static rt_err_t utest_tc_cleanup(void)
 {
+#ifdef RT_USING_SMP
+    if (soft_timer_thread)
+        rt_thread_control(soft_timer_thread, RT_THREAD_CTRL_BIND_CPU,
+                          (void *)(rt_ubase_t)saved_timer_affinity);
+    rt_thread_control(rt_thread_self(), RT_THREAD_CTRL_BIND_CPU,
+                      (void *)(rt_ubase_t)saved_affinity);
+#endif
     timer.dynamic_timer = RT_NULL;
     timer.callbacks = 0;
 
