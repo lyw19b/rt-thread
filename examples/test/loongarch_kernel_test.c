@@ -18,7 +18,7 @@ static int iterations;
 static rt_ubase_t mailbox_pool[4];
 static rt_uint8_t queue_pool[128];
 
-#define CHECK(expr) do { if (!(expr)) { rt_kprintf("FAIL line %d: %s\n", __LINE__, #expr); failures++; } } while (0)
+#define CHECK(expr) do { if (!(expr)) { rt_kprintf("FAIL line %d: %s\n", __LINE__, #expr); __atomic_fetch_add(&failures, 1, __ATOMIC_RELAXED); } } while (0)
 
 static void timer_entry(void *arg)
 {
@@ -165,6 +165,18 @@ MSH_CMD_EXPORT(port_test, Test scheduling IPC timers heap and floating point con
 
 #ifdef RT_USING_SMART
 #include <mm_page.h>
+#include <loongarch.h>
+
+static void port_mmu(void)
+{
+    rt_bool_t enabled = !!(csr_read64(LOONGARCH_CSR_PWCTL1) & CSR_PWCTL1_PTW);
+#ifdef LOONGARCH_HARDWARE_PTW
+    rt_kprintf("MMU: hardware %s\n", enabled && (read_cpucfg(2) & CPUCFG2_PTW) ? "PASS" : "FAIL");
+#else
+    rt_kprintf("MMU: software %s\n", !enabled ? "PASS" : "FAIL");
+#endif
+}
+MSH_CMD_EXPORT(port_mmu, Check the active TLB refill mode);
 
 static void port_resources(void)
 {
@@ -175,3 +187,12 @@ static void port_resources(void)
 }
 MSH_CMD_EXPORT(port_resources, Show heap and free pages for leak checks);
 #endif
+
+static int port_echo(int argc, char **argv)
+{
+    if (argc != 2)
+        return -RT_EINVAL;
+    rt_kprintf("PORT ECHO: %s\n", argv[1]);
+    return RT_EOK;
+}
+MSH_CMD_EXPORT(port_echo, Echo a token for serial ordering regression);

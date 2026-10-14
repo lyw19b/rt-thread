@@ -6,6 +6,10 @@ RTT_DIR := ../../..
 
 PKGS_DIR := packages
 
+config RT_CPUS_NR
+    default 2 if RT_USING_SMP
+    range 1 2 if RT_USING_SMP
+
 source "$(RTT_DIR)/Kconfig"
 osource "$PKGS_DIR/Kconfig"
 
@@ -33,3 +37,7 @@ config RT_USING_UART4
 endif
 
 source "$(RTT_DIR)/libcpu/loongarch/ls2k/gmac/Kconfig"
+
+config BSP_USING_SELFTEST
+    bool "Build kernel port regression and stress commands"
+    default n

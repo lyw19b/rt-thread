@@ -24,14 +24,27 @@ def run(command, log, env=None, cwd=BSP):
                    stdout=log, stderr=subprocess.STDOUT, check=True)
 
 
-def build(mode, env, output):
+def set_config(config, name, value):
+    config = re.sub(rf"^(?:CONFIG_{name}=.*|# CONFIG_{name} is not set)\n", "", config, flags=re.M)
+    return config + f"CONFIG_{name}={value}\n"
+
+
+def build(mode, env, output, cpus=0, ptw="software"):
     config = (BSP / f"{mode}_defconfig").read_text()
     if "CONFIG_BSP_USING_SELFTEST=y" not in config:
         config += "\nCONFIG_BSP_USING_SELFTEST=y\n"
     config += "CONFIG_RT_USING_UTEST=y\nCONFIG_RT_USING_UTESTCASES=y\n"
     config += "".join(f"CONFIG_RT_UTEST_{case}=y\n" for case in KERNEL_CASES)
+    if cpus:
+        config += "CONFIG_RT_UTEST_SMP_AFFFINITY=y\nCONFIG_RT_UTEST_SMP_THREAD_PREEMPTION=y\n"
     if mode == "smart":
         config += "CONFIG_RT_UTEST_MM_API=y\nCONFIG_RT_UTEST_MM_LWP=y\n"
+        if cpus:
+            config = set_config(config, "RT_LWP_MAX_NR", max(30, cpus * 2 + 32))
+        config = set_config(config, "LOONGARCH_SOFTWARE_PTW", "y" if ptw == "software" else "n")
+        config = set_config(config, "LOONGARCH_HARDWARE_PTW", "y" if ptw == "hardware" else "n")
+    config = set_config(config, "RT_USING_SMP", "y" if cpus else "n")
+    config = set_config(config, "RT_CPUS_NR", cpus or 1)
     (BSP / ".config").write_text(config)
     with (output / f"{mode}-build.log").open("w") as log:
         run(["scons", "--pyconfig-silent"], log, env)
@@ -59,7 +72,10 @@ def disk_image(args, env, output):
 
 class Guest:
     def __init__(self, args, kernel, disk, log):
-        command = ["-M", "virt", "-m", "256M", "-nographic", "-kernel", str(kernel)]
+        command = ["-M", "virt", "-m", "256M", "-smp", str(args.cpus or 1),
+                   "-nographic", "-kernel", str(kernel)]
+        if getattr(args, "ptw", "software") == "hardware":
+            command += ["-cpu", "la464,ptw=on"]
         if disk:
             command += ["-device", f"loader,file={disk},addr=0xc000000,force-raw=on"]
         self.process = pexpect.spawn(args.qemu, command, encoding="utf-8", timeout=30)
@@ -71,8 +87,12 @@ class Guest:
             raise
 
     def expect(self, pattern, timeout=30):
-        result = self.process.expect([pattern, r"SMART FAIL:|KERNEL PORT TEST: FAIL|\[  FAILED  \]|Assertion failed|assertion failed|Kernel page fault"], timeout=timeout)
+        result = self.process.expect([pattern, r"SMART FAIL:|\[  ASSERT  \]|KERNEL PORT TEST: FAIL|SMP TEST: FAIL|SMP REAP TEST: FAIL|SMP TLB TEST: FAIL|\[  FAILED  \]|Assertion failed|assertion failed|Kernel page fault"], timeout=timeout)
         if result:
+            try:
+                self.process.expect(r"\r?\n", timeout=5)
+            except (pexpect.TIMEOUT, pexpect.EOF):
+                pass
             raise RuntimeError("Guest test failed; see QEMU log")
         return self.process.before
 
@@ -108,14 +128,34 @@ def exercise(mode, args, kernel, disk, output):
     with (output / f"{mode}-qemu.log").open("w", buffering=1) as log:
         guest = Guest(args, kernel, disk if mode != "nano" else None, log)
         try:
+            for sequence in range(100):
+                token = f"{sequence:04d}-0123456789abcdefghijklmnopqrstuvwxyz"
+                result = guest.command(f"port_echo {token}")
+                if f"PORT ECHO: {token}" not in result:
+                    raise RuntimeError("Serial input ordering regression")
             guest.kernel_test()
+            if args.cpus:
+                result = guest.command(f"smp_test {args.smp_iterations}", 180)
+                if f"SMP TEST: PASS cpus={args.cpus}" not in result:
+                    raise RuntimeError("Missing SMP regression result")
+                result = guest.command("smp_reap_test 1000", 180)
+                if "SMP REAP TEST: PASS" not in result:
+                    raise RuntimeError("Missing cross-CPU reclamation result")
             guest.process.sendline("utest_run")
             results = guest.expect(r"\[ utest    \] finished", 900)
-            expected = 32 if mode == "smart" else 19
+            expected = (32 if mode == "smart" else 19) + (4 if args.cpus else 0)
             if not re.search(rf"\[  PASSED  \].*{expected} tests\.", results):
                 raise RuntimeError(f"Expected {expected} passing official test cases")
             guest.command("")
             if mode == "smart":
+                refill = guest.command("port_mmu")
+                if f"MMU: {getattr(args, 'ptw', 'software')} PASS" not in refill:
+                    raise RuntimeError("Unexpected TLB refill mode")
+                if args.cpus:
+                    for repeat in range(args.repeats):
+                        result = guest.command("smp_tlb_test 1000", 180)
+                        if "SMP TLB TEST: PASS" not in result:
+                            raise RuntimeError("Missing TLB shootdown result")
                 guest.user_test("/user.elf", "SMART REGRESSION PASS")
                 baseline = guest.resources()
                 for repeat in range(args.repeats):
@@ -124,6 +164,13 @@ def exercise(mode, args, kernel, disk, output):
                     if current != baseline:
                         raise RuntimeError(f"Resource leak after round {repeat + 1}: {baseline} -> {current}")
                     print(f"smart: {args.fork_loops} fork/CoW cycles, resources {current}", flush=True)
+                    if args.cpus:
+                        guest.user_test(f"/user.elf parallel {args.cpus} {args.fork_loops}",
+                                        "SMART PARALLEL PASS", max(600, args.cpus * args.fork_loops / 8))
+                        current = guest.resources()
+                        if current != baseline:
+                            raise RuntimeError(f"Parallel process leak: {baseline} -> {current}")
+                        print(f"smart: {args.cpus} processes x {args.fork_loops} fork/CoW cycles, resources {current}", flush=True)
             for repeat in range(args.repeats):
                 guest.kernel_test(args.iterations)
                 print(f"{mode}: kernel stress {repeat + 1}/{args.repeats}, {args.iterations} iterations/worker", flush=True)
@@ -136,6 +183,10 @@ def exercise(mode, args, kernel, disk, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cpus", type=int, default=0, help="SMP CPU count (1..16); 0 tests UP")
+    parser.add_argument("--ptw", choices=("software", "hardware"), default="software",
+                        help="Smart refill mode; hardware requires QEMU with -cpu la464,ptw=on")
+    parser.add_argument("--smp-iterations", type=int, default=100000)
     parser.add_argument("--mode", choices=("nano", "standard", "smart", "all"), default="all")
     parser.add_argument("--iterations", type=int, default=20000)
     parser.add_argument("--fork-loops", type=int, default=1024)
@@ -147,6 +198,8 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.iterations <= 1000000 or not 1 <= args.fork_loops <= 100000 or args.repeats < 1:
         parser.error("test counts must be positive and within the guest limits")
+    if not 0 <= args.cpus <= 16 or not 1 <= args.smp_iterations <= 1000000:
+        parser.error("invalid SMP CPU or iteration count")
     env = os.environ.copy()
     if "RTT_EXEC_PATH" not in env:
         candidates = sorted((Path.home() / "local").glob("*/bin/loongarch64-linux-musl-gcc"))
@@ -163,7 +216,7 @@ def main():
         kernels = {}
         for mode in modes:
             print(f"Building {mode}", flush=True)
-            kernels[mode] = build(mode, env, output)
+            kernels[mode] = build(mode, env, output, args.cpus, args.ptw)
         if args.parallel:
             with ThreadPoolExecutor(max_workers=len(modes)) as pool:
                 jobs = {mode: pool.submit(exercise, mode, args, kernels[mode], disk, output)

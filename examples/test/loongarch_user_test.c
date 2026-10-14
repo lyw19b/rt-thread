@@ -7,6 +7,7 @@
  */
 #include <stddef.h>
 #include <stdint.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <signal.h>
@@ -80,6 +81,17 @@ static void fail(const char *text)
 }
 #define CHECK(expr) do { if (!(expr)) fail(#expr); } while (0)
 
+/* A previously exited child's SIGCHLD can interrupt the next wait. */
+static long wait_child(long pid, int *status)
+{
+    long result;
+    do
+    {
+        result = CALL(SMART_SYS_WAITPID, pid, status, 0);
+    } while (result == -EINTR);
+    return result;
+}
+
 static volatile int signal_count;
 static volatile int cloned;
 static volatile long clone_tls_seen;
@@ -152,7 +164,7 @@ void clone_child(void)
     int i;
     clone_tls_seen = get_tp();
     for (i = 0; i < 100; i++) CALL(SMART_SYS_MDELAY, 1, 0, 0);
-    cloned = 1;
+    __atomic_store_n(&cloned, 1, __ATOMIC_RELEASE);
     exit_test(0);
 }
 
@@ -167,7 +179,7 @@ static void test_clone(void)
     CHECK(CALL(SMART_SYS_SET_THREAD_AREA, &parent_tls, 0, 0) == 0);
     CHECK(get_tp() == (long)&parent_tls);
     CHECK(loongarch_test_clone(args) > 0);
-    for (i = 0; i < 1000 && !cloned; i++) CALL(SMART_SYS_MDELAY, 1, 0, 0);
+    for (i = 0; i < 1000 && !__atomic_load_n(&cloned, __ATOMIC_ACQUIRE); i++) CALL(SMART_SYS_MDELAY, 1, 0, 0);
     CHECK(cloned && clone_tls_seen == (long)&child_tls);
     CHECK(get_tp() == (long)&parent_tls);
     puts_test("SMART clone TLS PASS\n");
@@ -178,7 +190,7 @@ static volatile int rt_thread_done;
 static int rt_user_thread(void *parameter)
 {
     CHECK(parameter == (void *)0x1234);
-    rt_thread_done = 1;
+    __atomic_store_n(&rt_thread_done, 1, __ATOMIC_RELEASE);
     return 0;
 }
 
@@ -200,7 +212,7 @@ static void test_rt_ipc_thread(void)
     thread = CALL(SMART_SYS_THREAD_CREATE, args, 0, 0);
     CHECK(thread);
     CHECK(CALL(SMART_SYS_THREAD_STARTUP, thread, 0, 0) == 0);
-    for (i = 0; i < 1000 && !rt_thread_done; i++) CALL(SMART_SYS_MDELAY, 1, 0, 0);
+    for (i = 0; i < 1000 && !__atomic_load_n(&rt_thread_done, __ATOMIC_ACQUIRE); i++) CALL(SMART_SYS_MDELAY, 1, 0, 0);
     CHECK(rt_thread_done);
     CALL(SMART_SYS_MDELAY, 10, 0, 0);
     puts_test("SMART RT IPC thread return PASS\n");
@@ -247,7 +259,7 @@ static void test_memory_fork(int loops)
             }
             exit_test(37);
         }
-        CHECK(CALL(SMART_SYS_WAITPID, pid, &status, 0) == pid);
+        CHECK(wait_child(pid, &status) == pid);
         CHECK(status == (37 << 8));
         for (i = 0; i < 16 * 4096 / sizeof(long); i++) CHECK(memory[i] == i + iteration);
         CHECK(CALL(SMART_SYS_MUNMAP, address, 16 * 4096, 0) == 0);
@@ -290,7 +302,7 @@ static void test_fault(void)
             }
             exit_test(0);
         }
-        CHECK(CALL(SMART_SYS_WAITPID, pid, &status, 0) == pid);
+        CHECK(wait_child(pid, &status) == pid);
         CHECK(status != 0);
     }
     puts_test("SMART fault isolation PASS\n");
@@ -308,9 +320,53 @@ static void test_exec(void)
         CALL(SMART_SYS_EXECVE, args[0], args, env);
         fail("execve returned");
     }
-    CHECK(CALL(SMART_SYS_WAITPID, pid, &status, 0) == pid);
+    CHECK(wait_child(pid, &status) == pid);
     CHECK(status == (23 << 8));
     puts_test("SMART exec PASS\n");
+}
+
+static int positive_number(const char *text, int limit)
+{
+    int value = 0;
+    while (*text >= '0' && *text <= '9' && value <= limit)
+        value = value * 10 + *text++ - '0';
+    CHECK(!*text && value > 0 && value <= limit);
+    return value;
+}
+
+static void test_parallel_processes(int workers, int loops)
+{
+    long children[16];
+    int i;
+    int done;
+    int batch_limit = 32 / workers;
+
+    /* Bound the defunct backlog. waitpid observes exit before the low-priority
+     * kernel reaper has freed the stack and address space. Between batches all
+     * workers stop, leaving CPUs available for reclamation. */
+    for (done = 0; done < loops; done += batch_limit)
+    {
+        int batch = loops - done < batch_limit ? loops - done : batch_limit;
+        for (i = 0; i < workers; i++)
+        {
+            children[i] = CALL(SMART_SYS_FORK, 0, 0, 0);
+            CHECK(children[i] >= 0);
+            if (!children[i])
+            {
+                test_memory_fork(batch);
+                test_exec();
+                exit_test(37);
+            }
+        }
+        for (i = 0; i < workers; i++)
+        {
+            int status = -1;
+            CHECK(wait_child(children[i], &status) == children[i]);
+            CHECK(status == (37 << 8));
+        }
+        CALL(SMART_SYS_MDELAY, 100, 0, 0);
+    }
+    puts_test("SMART PARALLEL PASS\n");
 }
 
 void user_main(long *args)
@@ -319,6 +375,12 @@ void user_main(long *args)
     char **argv = (char **)&args[1];
     int loops = 8;
     if (argc > 1 && argv[1][0] == 'e') exit_test(23);
+    if (argc > 1 && argv[1][0] == 'p')
+    {
+        CHECK(argc == 4);
+        test_parallel_processes(positive_number(argv[2], 16), positive_number(argv[3], 100000));
+        exit_test(0);
+    }
     if (argc > 1 && argv[1][0] == 's')
     {
         loops = 256;

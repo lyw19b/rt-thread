@@ -1,6 +1,6 @@
 # LS2K1000LA 与 LS2K0300
 
-本 BSP 面向 LoongArch 版龙芯 2K1000LA，使用单核 RT-Thread 标准版。板级地址和外设连接参考 `rt-thread-2k1000/bsp/loongarch/ls2kdev`，网络驱动已重新组织实现。Nano、Smart 的 QEMU 配置仍在 `bsp/qemu-virt64-loongarch`；本板尚未实现 Smart 地址空间初始化。
+本 BSP 面向 LoongArch 版龙芯 2K1000LA，默认使用双核 SMP RT-Thread 标准版。板级地址和外设连接参考 `rt-thread-2k1000/bsp/loongarch/ls2kdev`，网络驱动已重新组织实现。Nano、Smart 的 QEMU 配置仍在 `bsp/qemu-virt64-loongarch`；本板尚未实现 Smart 地址空间初始化。
 
 ## 构建
 
@@ -12,7 +12,7 @@ scons --pyconfig-silent
 scons -j8
 ```
 
-`standard_defconfig` 保留不启用网络的基础配置。两种配置均不依赖外部软件包。用 `scons --menuconfig` 调整配置，再由 SCons 生成 `rtconfig.h`。
+`standard_defconfig` 保留不启用网络的基础配置。两种配置均开启 SMP、默认 2 核，可在 menuconfig 中改为 1 核或关闭 SMP，均不依赖外部软件包。用 `scons --menuconfig` 调整配置，再由 SCons 生成 `rtconfig.h`。
 
 默认生成 ELF 和原始镜像。需要 U-Boot 镜像时设置 `MKIMAGE` 为支持 LoongArch 的 mkimage 路径。内核链接地址为 `0x9000000098000000`；固件需完成 DDR、外设时钟、引脚复用和 PCI BAR 分配。本仓库不保存固件、工具链或生成的二进制。
 
@@ -64,7 +64,7 @@ python3 examples/test/ls2k_gmac_test.py --build --output /tmp/ls2k-gmac-test
 - TX 环满、完成回收、发布 OWN 的顺序、RX 坏帧/非法长度/FCS 和环回绕。
 - 两个独立网口模型各 100,000 帧、变长数据校验、复位后重建环。
 - lwIP 接收通知在邮箱满后的重试和通知合并。
-- GMAC0、GMAC1、双口 4 描述符/2 字节填充/直接 TX、双口 128 描述符/lwIP 2.2.1/IPv6、无网络标准版共五种交叉构建。
+- GMAC0、GMAC1、双口 4 描述符/2 字节填充/直接 TX、双口 128 描述符/lwIP 2.2.1/IPv6、无网络标准版以及关闭 SMP 的标准版，共六种交叉构建。
 
 脚本会恢复原 `.config` 并重新生成 `rtconfig.h`，日志和可执行文件放在指定目录；测试期间不要在同一 BSP 手动构建。宿主模型覆盖驱动状态和边界，不模拟总线时序或物理网络。
 
@@ -86,7 +86,7 @@ python3 examples/test/ls2k_gmac_test.py --peer 192.168.1.20 --frames 10000 --win
 
 替换为板卡实际地址。主机逐帧校验序号和内容，并报告丢包、重复和耗时。测试两个网口时建议使用独立子网，分别执行；观察 `gmac_status` 确认流量经过预期端口。还应验证拔插网线、10/100/1000 Mbps 协商、连续压力下的错误计数及内存用量。
 
-2026-10-14，使用 GCC 15.2.0 完成上述五种配置的交叉构建，无编译告警；宿主测试在 AddressSanitizer/UndefinedBehaviorSanitizer 下通过，两端口模型各完成 100,000 帧校验。UDP 校验客户端另通过本机回显 10,000 帧测试，该结果不代表板卡收发性能。
+2026-10-14，使用 GCC 15.2.0 完成上述六种配置的交叉构建，无编译告警；宿主测试在 AddressSanitizer/UndefinedBehaviorSanitizer 下通过，两端口模型各完成 100,000 帧校验。UDP 校验客户端另通过本机回显 10,000 帧测试，该结果不代表板卡收发性能。
 
 当前尚未进行实板收发验证。现有主线 LoongArch QEMU 只有 `virt` 机型，不能代替 LS2K1000LA GMAC 验证。AHCI 可选驱动沿用上一阶段迁入版本，不属于此次网络重构范围。
 
@@ -98,14 +98,14 @@ python3 examples/test/ls2k_gmac_test.py --peer 192.168.1.20 --frames 10000 --win
 
 | 项目 | LS2K1000LA | LS2K0300 |
 | --- | --- | --- |
-| CPU 移植 | 共用 LoongArch64 / LP64D，单启动核 | 共用 LoongArch64 / LP64D，单核 |
+| CPU 移植 | 共用 LoongArch64 / LP64D，SMP 默认 2 核 | 共用 LoongArch64 / LP64D，SMP 默认 1 核 |
 | UART0 / 步长 | `0x1fe20000` / `0x100` | `0x16100000` / `0x400` |
 | 传统中断控制器 | `0x1fe01400`，路由值 `0x11` | `0x16001400`，路由值 `0x10`，低 4 位保留 |
 | GMAC 资源 | 读取固件 PCI BAR | 固定 MMIO `0x16020000` / `0x16030000` |
 | GMAC IRQ | 12 / 14 | 49 / 50（传统中断） |
 | 内核加载地址 | `0x9000000098000000` | `0x9000000000200000` |
 
-2K0300 使用传统中断，关闭固件可能留下的扩展中断通路；不访问 2K1000LA 专有的 BOUNCE/AUTO 寄存器。Nano、标准版、Smart 共用启动、上下文、定时器和 CPU 异常代码，没有复制另一套 CPU 移植。
+2K0300 使用传统中断，关闭固件可能留下的扩展中断通路；不访问 2K1000LA 专有的 BOUNCE/AUTO 寄存器。Nano、标准版、Smart 共用启动、上下文、定时器和 CPU 异常代码，没有复制另一套 CPU 移植。两款芯片与 QEMU 共用 IOCSR 邮箱/IPI 驱动；2K0300 的配置限定为 1 核。2K1000LA 次核需要固件停驻在邮箱等待入口，启动核向邮箱 0 写入次核入口物理地址并发送 IPI；5 秒内未上线会报错。固件交接协议仍需实板核验。
 
 ```sh
 cd bsp/loongarch/ls2k0300
@@ -115,19 +115,19 @@ scons --pyconfig-silent
 scons -j8
 ```
 
-默认 `.config` 为标准版；`network_defconfig` 启用双 GMAC，Smart 也可在 menuconfig 中启用同一网络驱动。`smart_defconfig` 使用临时根文件系统，重启后数据丢失；尚未提供 SDIO/eMMC 存储驱动或完整 musl 用户态发行环境。系统调用沿用仓库官方表，不重新编号。
+默认 `.config` 为标准版；`network_defconfig` 启用双 GMAC，Smart 也可在 menuconfig 中启用同一网络驱动。`smart_defconfig` 使用临时根文件系统，重启后数据丢失；尚未提供 SDIO/eMMC 存储驱动或完整 musl 用户态发行环境。系统调用沿用仓库官方表，不重新编号。2K0300 和 2K1000LA 均只使用软件 TLB refill，Kconfig 不允许选择硬件 PTW；2K1000LA 的 Smart 板级内存初始化仍未提供。
 
 `BSP_UART_INDEX` 选择控制台 UART0～9，设备名固定为 `uart`。默认 UART0，115200、8N1；实际调试口若接在其他 UART，需调整该选项。驱动读取采样模式、DDR PLL 和 APB 分频寄存器得到时钟；`BSP_UART_CLOCK_HZ` 非零时可明确覆盖输入频率。PLL、DDR 初始化、引脚复用、外部 PHY 复位及 RGMII 延迟由引导固件完成，驱动不会猜测板上连接或重写这些设置。
 
 内核放在低 DDR 的 2 MiB 处，链接区域限制为 16 MiB，堆从 `_end` 到 32 MiB。Smart 页分配区为 32 MiB～`BSP_RAM_END`，默认上界 128 MiB；应按实际可用内存和固件保留区调整。上界最多 `0x0ff00000`，避开可能仍打开的 DDR 控制器寄存器窗口。GMAC DMA 存储仍在 `.gmac_dma` 中，只接受低 256 MiB DDR 的地址，并为对应端口选择非缓存 DDR 通路；不把 CPU 高 DDR 别名直接当成 DMA 地址。
 
-`BSP_USING_SELFTEST` 提供 `port_test`、`port_resources` 等回归入口；网络压力测试继续使用上文同一套 `gmac_echo` 和主机脚本。自动检查命令：
+两个 BSP 的 `BSP_USING_SELFTEST` 提供 `port_test`；启用 SMP 后另有 `smp_test` 和 `smp_reap_test`，Smart 还有 `port_resources`、`port_mmu` 和 `smp_tlb_test`。UART、传统中断控制器和 GMAC 的共享寄存器使用自旋锁保护，设备 IRQ 仍路由到启动核。网络压力测试继续使用上文同一套 `gmac_echo` 和主机脚本。自动检查命令：
 
 ```sh
 python3 examples/test/ls2k_platform_test.py
 python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 --output /tmp/ls2k0300-test
 ```
 
-2K0300 构建矩阵覆盖五种基础/网络组合以及 Nano、Smart、UART9 和 Smart 双网口。寄存器模型检查时钟计算、中断路由/确认/屏蔽、串口 DLAB 互斥和 DMA 通路；模型不能验证电气时序。现有 QEMU `virt` 不模拟 2K0300 外设，实板启动、串口时钟、PHY 协商与持续收发仍需硬件验收。当前没有板级复位/关机实现，使用板上复位键或引导固件。
+2K0300 构建矩阵覆盖五种基础/网络组合、关闭 SMP 的标准版，以及 Nano、Smart、UART9 和 Smart 双网口，共十种。寄存器模型检查时钟计算、中断路由/确认/屏蔽、串口 DLAB 互斥和 DMA 通路；模型不能验证电气时序。现有 QEMU `virt` 不模拟 2K0300 外设，实板启动、串口时钟、PHY 协商与持续收发仍需硬件验收。当前没有板级复位/关机实现，使用板上复位键或引导固件。
 
-本次验证（2026-10-14）：2K1000LA 五种配置、2K0300 九种配置交叉构建通过。共用驱动的宿主测试在 ASan/UBSan 下通过，两个 GMAC 模型各校验 100,000 帧；两种芯片的串口模型各执行 100,000 次轮询收发。QEMU `virt` 重新运行 Nano/标准版/Smart 官方测试，分别通过 19/19/32 项，每种配置通过 180 秒定时器压力及三轮双线程各 20,000 次迭代。Smart 另通过三轮各 1,024 次 fork/CoW，堆与页计数保持 92,896 字节、31,603/31,690。QEMU 结果验证共用内核，不代表 2K0300 已通过实板运行验收。
+本次验证（2026-10-14）：2K1000LA 六种配置、2K0300 十种配置交叉构建通过，包含 SMP 和关闭 SMP 的标准版。共用驱动的宿主测试在 ASan/UBSan 下通过，两个 GMAC 模型各校验 100,000 帧；两种芯片的串口模型各执行 100,000 次轮询收发。QEMU 的多核内核、用户态和压力测试记录见 `bsp/qemu-virt64-loongarch/README.md`。这些结果不能代替两款芯片的固件交接、次核启动和网络实板验收。

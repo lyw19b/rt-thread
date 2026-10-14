@@ -1,6 +1,8 @@
 #ifndef RT_CONFIG_H__
 #define RT_CONFIG_H__
 
+#define RT_CPUS_NR 4
+
 /* RT-Thread Kernel */
 
 /* klibc options */
@@ -74,7 +76,7 @@
 /* end of klibc options */
 #define RT_NAME_MAX 16
 #define RT_USING_NANO
-#define RT_CPUS_NR 1
+#define RT_USING_SMP
 #define RT_ALIGN_SIZE 16
 #define RT_THREAD_PRIORITY_32
 #define RT_THREAD_PRIORITY_MAX 32
@@ -85,6 +87,7 @@
 #define RT_USING_IDLE_HOOK
 #define RT_IDLE_HOOK_LIST_SIZE 4
 #define IDLE_THREAD_STACK_SIZE 4096
+#define SYSTEM_THREAD_STACK_SIZE 4096
 #define RT_USING_TIMER_SOFT
 #define RT_TIMER_THREAD_PRIO 4
 #define RT_TIMER_THREAD_STACK_SIZE 4096
@@ -118,6 +121,7 @@
 #define RT_CONSOLE_DEVICE_NAME "uart1"
 #define RT_USING_CONSOLE_OUTPUT_CTL
 #define RT_VER_NUM 0x50301
+#define RT_USING_STDC_ATOMIC
 #define RT_BACKTRACE_LEVEL_MAX_NR 32
 /* end of RT-Thread Kernel */
 #define ARCH_CPU_64BIT
@@ -129,6 +133,7 @@
 /* RT-Thread LoongArch CPU */
 
 #define RT_USING_FPU
+#define LOONGARCH_HAS_HARDWARE_PTW
 /* end of RT-Thread LoongArch CPU */
 
 /* RT-Thread Components */

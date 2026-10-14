@@ -15,9 +15,7 @@
 
 #define IPI_STATUS      0x1000
 #define IPI_ENABLE      0x1004
-#define IPI_SET         0x1008
 #define IPI_CLEAR       0x100c
-#define IPI_MAILBOX     0x1020
 #define IPI_SEND        0x1040
 #define IPI_MAIL_SEND   0x1048
 #define IPI_SEND_WAIT   (1UL << 31)

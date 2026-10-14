@@ -41,6 +41,19 @@ struct rt_irq_desc { rt_isr_handler_t handler; void *param; };
 #define BSP_UART_CLOCK_HZ 0
 rt_base_t rt_hw_interrupt_disable(void);
 void rt_hw_interrupt_enable(rt_base_t level);
+struct rt_spinlock { int unused; };
+#define RT_SPINLOCK_INIT {0}
+static inline void rt_spin_lock_init(struct rt_spinlock *lock) { lock->unused = 0; }
+static inline rt_base_t rt_spin_lock_irqsave(struct rt_spinlock *lock)
+{
+    (void)lock;
+    return rt_hw_interrupt_disable();
+}
+static inline void rt_spin_unlock_irqrestore(struct rt_spinlock *lock, rt_base_t level)
+{
+    (void)lock;
+    rt_hw_interrupt_enable(level);
+}
 void rt_hw_dmb(void);
 void rt_thread_mdelay(int ms);
 void *test_mmio(uintptr_t address);

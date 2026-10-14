@@ -94,7 +94,9 @@ def build_tests(args, output):
                        "RT_LWIP_ETH_PAD_SIZE": "2", "BSP_GMAC_USING_ECHO_TEST": "y"},
         "dual-large-ipv6": {"BSP_GMAC_RING_SIZE": "128", "RT_USING_LWIP212": "n",
                             "RT_USING_LWIP221": "y", "RT_USING_LWIP_IPV6": "y"},
-        "standard": {},
+        "standard": {"BSP_USING_SELFTEST": "y"},
+        "standard-up": {"RT_USING_SMP": "n", "RT_CPUS_NR": "1",
+                        "BSP_USING_SELFTEST": "y"},
     }
     if args.bsp == "ls2k0300":
         variants.update({"nano": {}, "smart": {},
@@ -107,7 +109,7 @@ def build_tests(args, output):
     try:
         for name, options in variants.items():
             base = name if name in ("nano", "smart", "standard") else "network"
-            if name == "uart9":
+            if name in ("uart9", "standard-up"):
                 base = "standard"
             config = (BSP / f"{base}_defconfig").read_text()
             for key, value in options.items():
@@ -117,6 +119,12 @@ def build_tests(args, output):
             with log_path.open("w") as log:
                 run(["scons", "--pyconfig-silent"], cwd=BSP, env=env, stdout=log, stderr=subprocess.STDOUT)
                 header = (BSP / "rtconfig.h").read_text()
+                expected_cpus = 2 if args.bsp == "ls2kdev" and name != "standard-up" else 1
+                assert f"#define RT_CPUS_NR {expected_cpus}\n" in header
+                assert ("#define RT_USING_SMP\n" in header) == (name != "standard-up")
+                assert "#define LOONGARCH_HARDWARE_PTW\n" not in header
+                if "#define RT_USING_SMART\n" in header:
+                    assert "#define LOONGARCH_SOFTWARE_PTW\n" in header
                 if name in ("nano", "smart", "smart-network"):
                     mode = "NANO" if name == "nano" else "SMART"
                     assert f"#define RT_USING_{mode}\n" in header
