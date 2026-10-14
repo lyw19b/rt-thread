@@ -70,9 +70,9 @@ void *test_mmio(uintptr_t address);
 #define PIN_IRQ_MODE_HIGH_LEVEL 3
 #define PIN_IRQ_MODE_LOW_LEVEL 4
 """)
-        for board in ("ls2kdev", "ls2k0300"):
+        for board in ("ls2k1000", "ls2k0300"):
             executable = output / board
-            flags = ["-DTEST_LS2K1000"] if board == "ls2kdev" else []
+            flags = ["-DTEST_LS2K1000"] if board == "ls2k1000" else []
             command = [os.environ.get("CC", "cc"), "-std=c11", "-O1", "-g",
                        "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
                        "-fno-omit-frame-pointer", *flags, "-I", str(output),

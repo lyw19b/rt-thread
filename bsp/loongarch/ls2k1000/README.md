@@ -5,7 +5,7 @@
 ## 构建
 
 ```sh
-cd bsp/loongarch/ls2kdev
+cd bsp/loongarch/ls2k1000
 export RTT_EXEC_PATH="$HOME/local/loongarch64-linux-musl-gcc-15.2.0/bin"
 cp network_defconfig .config  # 双网口、lwIP 2.1.2、DHCP、ping、SAL sockets
 scons --pyconfig-silent

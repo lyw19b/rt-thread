@@ -50,7 +50,7 @@ void rt_thread_mdelay(int ms)
 #define RT_USING_NANO
 #include "../../bsp/loongarch/common/drv_uart.c"
 #ifdef TEST_LS2K1000
-#include "../../bsp/loongarch/ls2kdev/drivers/drv_uart_config.c"
+#include "../../bsp/loongarch/ls2k1000/drivers/drv_uart_config.c"
 #else
 #include "../../bsp/loongarch/ls2k0300/drivers/drv_platform.c"
 #endif

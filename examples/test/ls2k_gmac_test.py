@@ -12,7 +12,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-BSP = ROOT / "bsp/loongarch/ls2kdev"
+BSP = ROOT / "bsp/loongarch/ls2k1000"
 DRIVER = ROOT / "bsp/loongarch/common/gmac"
 
 
@@ -119,7 +119,7 @@ def build_tests(args, output):
             with log_path.open("w") as log:
                 run(["scons", "--pyconfig-silent"], cwd=BSP, env=env, stdout=log, stderr=subprocess.STDOUT)
                 header = (BSP / "rtconfig.h").read_text()
-                expected_cpus = 2 if args.bsp == "ls2kdev" and name != "standard-up" else 1
+                expected_cpus = 2 if args.bsp == "ls2k1000" and name != "standard-up" else 1
                 assert f"#define RT_CPUS_NR {expected_cpus}\n" in header
                 assert ("#define RT_USING_SMP\n" in header) == (name != "standard-up")
                 assert "#define LOONGARCH_HARDWARE_PTW\n" not in header
@@ -199,7 +199,7 @@ def network_test(peer, frames, window):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
-    parser.add_argument("--bsp", choices=("ls2kdev", "ls2k0300"), default="ls2kdev")
+    parser.add_argument("--bsp", choices=("ls2k1000", "ls2k0300"), default="ls2k1000")
     parser.add_argument("--build", action="store_true", help="also cross-build the selected BSP configuration matrix")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--peer", action="append", default=[], help="board IPv4 address running gmac_echo")
