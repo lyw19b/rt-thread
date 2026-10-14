@@ -440,6 +440,11 @@ static void test_thread_priority(void)
         uassert_false(tid8 == RT_NULL);
         return;
     }
+#ifdef RT_USING_SMP
+    /* Immediate priority preemption is a same-CPU guarantee. A worker running
+     * remotely may finish after rt_thread_startup has returned here. */
+    rt_thread_control(tid8, RT_THREAD_CTRL_BIND_CPU, (void *)0);
+#endif
     count = 0;
     ret_startup = rt_thread_startup(tid8);
     if (ret_startup != RT_EOK)
@@ -748,8 +753,18 @@ void test_thread_yield_nosmp(void)
 // }
 #endif
 
+#ifdef RT_USING_SMP
+static rt_uint8_t saved_affinity;
+#endif
+
 static rt_err_t utest_tc_init(void)
 {
+#ifdef RT_USING_SMP
+    /* Exact tick and immediate preemption checks run on the tick CPU. */
+    saved_affinity = RT_SCHED_CTX(rt_thread_self()).bind_cpu;
+    rt_thread_control(rt_thread_self(), RT_THREAD_CTRL_BIND_CPU, (void *)0);
+    rt_thread_mdelay(1);
+#endif
     __current_thread = rt_thread_self();
     change_priority = UTEST_THR_PRIORITY + 5;
     tid3_delay_pass_flag = 0;
@@ -763,6 +778,10 @@ static rt_err_t utest_tc_init(void)
 
 static rt_err_t utest_tc_cleanup(void)
 {
+#ifdef RT_USING_SMP
+    rt_thread_control(rt_thread_self(), RT_THREAD_CTRL_BIND_CPU,
+                      (void *)(rt_ubase_t)saved_affinity);
+#endif
     return RT_EOK;
 }
 

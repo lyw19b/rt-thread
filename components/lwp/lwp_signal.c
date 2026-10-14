@@ -803,49 +803,42 @@ void lwp_thread_signal_catch(void *exp_frame)
 
 static int _do_signal_wakeup(rt_thread_t thread, int sig)
 {
-    int need_schedule;
+    int need_schedule = 0;
     rt_sched_lock_level_t slvl;
+
     if (!_sigismember(&thread->signal.sigset_mask, sig))
     {
         int stat;
         rt_sched_lock(&slvl);
         stat = rt_sched_thread_get_stat(thread);
-        if ((stat & RT_THREAD_SUSPEND_MASK) == RT_THREAD_SUSPEND_MASK)
+        if ((stat & RT_THREAD_SUSPEND_MASK) == RT_THREAD_SUSPEND_MASK &&
+            ((stat & RT_SIGNAL_COMMON_WAKEUP_MASK) != RT_SIGNAL_COMMON_WAKEUP_MASK ||
+             ((sig == SIGKILL || sig == SIGSTOP) &&
+              (stat & RT_SIGNAL_KILL_WAKEUP_MASK) != RT_SIGNAL_KILL_WAKEUP_MASK)))
         {
-            if ((stat & RT_SIGNAL_COMMON_WAKEUP_MASK) != RT_SIGNAL_COMMON_WAKEUP_MASK)
+            thread->error = RT_EINTR;
+            if (!thread->wakeup_handle.func)
             {
-                thread->error = RT_EINTR;
+                /* Keep the state check and ordinary wakeup atomic. Otherwise
+                 * another CPU can resume the waiter and let it block on an
+                 * unrelated, uninterruptible mutex before this wakeup runs. */
+                need_schedule = rt_sched_thread_ready(thread) == RT_EOK;
                 rt_sched_unlock(slvl);
-
-                rt_thread_wakeup(thread);
-                need_schedule = 1;
-            }
-            else if ((sig == SIGKILL || sig == SIGSTOP) &&
-                    ((stat & RT_SIGNAL_KILL_WAKEUP_MASK) != RT_SIGNAL_KILL_WAKEUP_MASK))
-            {
-                thread->error = RT_EINTR;
-                rt_sched_unlock(slvl);
-
-                rt_thread_wakeup(thread);
-                need_schedule = 1;
             }
             else
             {
+                /* Channel callbacks acquire their own locks. */
                 rt_sched_unlock(slvl);
-                need_schedule = 0;
+                rt_thread_wakeup(thread);
+                need_schedule = 1;
             }
         }
         else
         {
             rt_sched_unlock(slvl);
-            need_schedule = 0;
         }
-
         RT_SCHED_DEBUG_IS_UNLOCKED;
     }
-    else
-        need_schedule = 0;
-
     return need_schedule;
 }
 
