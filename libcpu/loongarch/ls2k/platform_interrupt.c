@@ -7,6 +7,7 @@
 #ifndef RT_USING_NANO
 #include <drivers/dev_pin.h>
 #endif
+
 #include "platform_interrupt.h"
 #include "cpuport.h"
 
@@ -50,21 +51,28 @@ void liointc_set_irq_mode(int irq, int mode)
 
     if (irq < 0 || irq >= MAX_INTR)
         return;
+    
     if (mode != PIN_IRQ_MODE_RISING && mode != PIN_IRQ_MODE_FALLING &&
         mode != PIN_IRQ_MODE_HIGH_LEVEL && mode != PIN_IRQ_MODE_LOW_LEVEL)
         return;
+    
     bit = 1U << (irq % 32);
     level = rt_spin_lock_irqsave(&irq_lock);
     polarity = irq_polarity[irq / 32] & ~bit;
     edge = irq_edge[irq / 32] & ~bit;
+    
     if (mode == PIN_IRQ_MODE_LOW_LEVEL || mode == PIN_IRQ_MODE_FALLING)
         polarity |= bit;
+    
     if (mode == PIN_IRQ_MODE_RISING || mode == PIN_IRQ_MODE_FALLING)
         edge |= bit;
+    
     irq_polarity[irq / 32] = polarity;
     irq_edge[irq / 32] = edge;
+    
     HWREG32(LS2K_INTPOL_REG(irq)) = polarity;
     HWREG32(LS2K_INTEDGE_REG(irq)) = edge;
+    
     rt_hw_dmb();
     rt_spin_unlock_irqrestore(&irq_lock, level);
 }
@@ -82,6 +90,7 @@ rt_isr_handler_t rt_hw_interrupt_install(int vector, rt_isr_handler_t handler,
         previous = irq_table[vector].handler;
         irq_table[vector].handler = handler;
         irq_table[vector].param = parameter;
+
 #ifdef RT_USING_INTERRUPT_INFO
         rt_strncpy(irq_table[vector].name, name ? name : "", RT_NAME_MAX - 1);
         irq_table[vector].name[RT_NAME_MAX - 1] = '\0';
@@ -108,11 +117,13 @@ void platform_generic_irq(void)
         rt_base_t level = rt_spin_lock_irqsave(&irq_lock);
 
         pending &= pending - 1;
+        
         if (!(enabled_irqs & (1ULL << irq)))
         {
             rt_spin_unlock_irqrestore(&irq_lock, level);
             continue;
         }
+        
         if (irq_edge[irq / 32] & (1U << (irq % 32)))
         {
             /* Clear the latched edge before dispatch; CLR also masks it. */
@@ -120,6 +131,7 @@ void platform_generic_irq(void)
             HWREG32(LS2K_INTENSET_REG(irq)) = 1U << (irq % 32);
             rt_hw_dmb();
         }
+        
         handler = irq_table[irq].handler;
         parameter = irq_table[irq].param;
 #ifdef RT_USING_INTERRUPT_INFO
@@ -127,6 +139,7 @@ void platform_generic_irq(void)
             irq_table[irq].counter++;
 #endif
         rt_spin_unlock_irqrestore(&irq_lock, level);
+        
         /* Device handlers may mask their IRQ or acquire their own locks. */
         if (handler)
             handler(irq, parameter);
@@ -142,11 +155,14 @@ void rt_hw_interrupt_init(void)
     rt_spin_lock_init(&irq_lock);
     ls2k_interrupt_prepare();
     enabled_irqs = 0;
+    
     rt_memset(irq_polarity, 0, sizeof(irq_polarity));
     rt_memset(irq_edge, 0, sizeof(irq_edge));
     rt_memset(irq_table, 0, sizeof(irq_table));
+    
     for (irq = 0; irq < MAX_INTR; irq++)
         HWREG8(LS2K_IRQ_ROUTE_REG(irq)) = LS2K_LIO_ROUTE_VALUE;
+    
     for (irq = 0; irq < MAX_INTR; irq += 32)
     {
         HWREG32(LS2K_INTENCLR_REG(irq)) = 0xffffffff;
