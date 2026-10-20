@@ -274,7 +274,7 @@ static void test_memory_fork(int loops)
 static void test_fault(void)
 {
     int kind;
-    for (kind = 0; kind < 5; kind++)
+    for (kind = 0; kind < 6; kind++)
     {
         long pid = CALL(SMART_SYS_FORK, 0, 0, 0);
         int status = 0;
@@ -298,6 +298,9 @@ static void test_fault(void)
                 break;
             case 4:
                 __asm__ volatile(".word 0");
+                break;
+            case 5:
+                __asm__ volatile("asrtle.d %0, %1" ::"r"(1L), "r"(0L));
                 break;
             }
             exit_test(0);

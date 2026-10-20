@@ -37,10 +37,10 @@ rt_hw_context_switch:
     save_switch_fpu
     cpu_save_csr_reg sp
     cpu_save_nonscratch sp
-    LONG_ST  ra, sp, RT_THREAD_RA
-    LONG_ST  sp, a0, 0
+    ST  ra, sp, RT_THREAD_RA
+    ST  sp, a0, 0
 
-    LONG_LD  sp, a1, 0
+    LD  sp, a1, 0
 #ifdef RT_USING_SMP
     move a0, a2
     bl rt_cpus_lock_status_restore
@@ -74,7 +74,7 @@ rt_hw_context_switch:
  */
 .global rt_hw_context_switch_to
 rt_hw_context_switch_to:
-    LONG_LD  sp, a0, 0
+    LD  sp, a0, 0
 #ifdef RT_USING_SMP
     move a0, a1
     bl rt_cpus_lock_status_restore

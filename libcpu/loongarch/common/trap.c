@@ -269,6 +269,49 @@ void do_ri(struct pt_regs *regs)
 }
 
 /**
+ * @brief Dispatch a synchronous exception using its saved hardware cause.
+ * @param regs Complete exception frame supplied by the shared assembly entry.
+ * @note Local IRQs remain masked until the selected handler decides how to
+ *       terminate the faulting context. Only ADE/ALE populate the BADV snapshot;
+ *       the other synchronous handlers retain the zero value from SAVE_ALL.
+ */
+void loongarch_dispatch_exception(struct pt_regs *regs)
+{
+    rt_ubase_t cause = (regs->r_estat & CSR_ESTAT_EXC) >> CSR_ESTAT_EXC_SHIFT;
+
+    switch (cause)
+    {
+    case EXCCODE_ADE:
+        regs->r_bvaddr = csr_read64(LOONGARCH_CSR_BADV);
+        do_ade(regs);
+        break;
+    case EXCCODE_ALE:
+        regs->r_bvaddr = csr_read64(LOONGARCH_CSR_BADV);
+        do_ale(regs);
+        break;
+    case EXCCODE_BCE:
+        do_bce(regs);
+        break;
+    case EXCCODE_BP:
+        do_bp(regs);
+        break;
+    case EXCCODE_FPE:
+        do_fpe(regs);
+        break;
+    case EXCCODE_FPDIS:
+        do_fpu(regs);
+        break;
+    case EXCCODE_INE:
+    case EXCCODE_IPE:
+        do_ri(regs);
+        break;
+    default:
+        fatal_exception(regs, "Unhandled synchronous exception");
+        break;
+    }
+}
+
+/**
  * @brief    Dispatch one pending IPI, timer or platform interrupt class.
  *
  * @note     Called with local IRQs masked. Accounts interrupt nesting around

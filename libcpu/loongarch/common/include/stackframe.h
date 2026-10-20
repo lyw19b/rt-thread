@@ -33,7 +33,7 @@
 
 .macro exception_csr_save csr, offset
     csrrd   t0, \csr
-    LONG_ST t0, sp, \offset
+    ST t0, sp, \offset
 .endm
 
 /* Vector stubs have already preserved t0/t1 in KS0/KS1. Local IRQs stay
@@ -47,16 +47,16 @@
     csrrd   sp, EXCEPTION_KS2
 .Lexception_stack_ready\@:
     addi.d  sp, sp, -PT_SIZE
-    LONG_ST t0, sp, PT_R3
-    LONG_ST zero, sp, PT_R0
-    LONG_ST zero, sp, PT_RESERVED
-    LONG_ST zero, sp, PT_BVADDR
+    ST t0, sp, PT_R3
+    ST zero, sp, PT_R0
+    ST zero, sp, PT_RESERVED
+    ST zero, sp, PT_BVADDR
 
     csrrd   t0, EXCEPTION_KS0
     csrrd   t1, EXCEPTION_KS1
-    LONG_ST t0, sp, PT_R12
-    LONG_ST t1, sp, PT_R13
-    exception_gprs LONG_ST
+    ST t0, sp, PT_R12
+    ST t1, sp, PT_R13
+    exception_gprs ST
 
     exception_csr_save LOONGARCH_CSR_PRMD, PT_PRMD
     exception_csr_save LOONGARCH_CSR_CRMD, PT_CRMD
@@ -65,10 +65,10 @@
     exception_csr_save LOONGARCH_CSR_ESTAT, PT_ESTAT
     exception_csr_save LOONGARCH_CSR_ERA, PT_ERA
 
-    LONG_LD t0, sp, PT_PRMD
+    LD t0, sp, PT_PRMD
     andi    t0, t0, CSR_PRMD_PPLV
     beqz    t0, .Lexception_kernel_regs\@
-    LONG_ST u0, sp, PT_R21
+    ST u0, sp, PT_R21
     csrrd   u0, PERCPU_BASE_KS
 .Lexception_kernel_regs\@:
     save_exception_fpu
@@ -79,21 +79,21 @@
  */
 .macro RESTORE_ALL_AND_RET
     restore_exception_fpu
-    LONG_LD t0, sp, PT_ERA
+    LD t0, sp, PT_ERA
     csrwr   t0, LOONGARCH_CSR_ERA
-    LONG_LD t0, sp, PT_PRMD
+    LD t0, sp, PT_PRMD
     csrwr   t0, LOONGARCH_CSR_PRMD
-    LONG_LD t0, sp, PT_PRMD
+    LD t0, sp, PT_PRMD
     andi    t0, t0, CSR_PRMD_PPLV
     beqz    t0, .Lexception_restore_kernel\@
-    LONG_LD u0, sp, PT_R21
+    LD u0, sp, PT_R21
     addi.d  t0, sp, PT_SIZE
     csrwr   t0, EXCEPTION_KS2
 .Lexception_restore_kernel\@:
-    exception_gprs LONG_LD
-    LONG_LD t0, sp, PT_R12
-    LONG_LD t1, sp, PT_R13
-    LONG_LD sp, sp, PT_R3
+    exception_gprs LD
+    LD t0, sp, PT_R12
+    LD t1, sp, PT_R13
+    LD sp, sp, PT_R3
     ertn
 .endm
 
@@ -107,13 +107,13 @@
 .endm
 
 .macro cpu_save_nonscratch thread
-    switch_gprs LONG_ST, \thread
-    LONG_ST sp, \thread, RT_THREAD_SP
+    switch_gprs ST, \thread
+    ST sp, \thread, RT_THREAD_SP
 .endm
 
 .macro cpu_restore_nonscratch thread
-    LONG_LD ra, \thread, RT_THREAD_RA
-    switch_gprs LONG_LD, \thread
+    LD ra, \thread, RT_THREAD_RA
+    switch_gprs LD, \thread
 .endm
 
 .macro cpu_save_csr_reg thread

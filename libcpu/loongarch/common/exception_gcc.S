@@ -20,173 +20,148 @@
 #define rt_hw_interrupt_disable rt_hw_local_irq_disable
 #endif
 
-/* One entry template for RT-Thread C handlers. The vector stub owns t0/t1;
- * SAVE_ALL completes the frame before handler arguments are prepared.
+/* The copied vector stub preserves t0/t1 before entering any of these paths.
+ * Interrupts, synchronous exceptions and page faults each build one frame;
+ * their return policies are kept separate below.
  */
-.macro exception_dispatch name, handler, badv=0, fcsr=0
-    .align 5
-    START_POINT(\name)
+    .balign 32
+START_POINT(handle_vint)
     SAVE_ALL
-    .if \badv
-        csrrd t0, LOONGARCH_CSR_BADV
-        LONG_ST t0, sp, PT_BVADDR
-    .endif
-#ifdef RT_USING_FPU
-    .if \fcsr
-        movfcsr2gr a1, $fcsr0
-    .endif
-#endif
     move    a0, sp
-    la.abs  t0, \handler
-    jirl    ra, t0, 0
-    la.abs  t0, ret_from_exception
-    jirl    zero, t0, 0
-    START_POINT_END(\name)
-.endm
+    bl      do_rt_dispatch_trap
+    b       ret_from_exception
+START_POINT_END(handle_vint)
 
 /**
- * @brief    Complete deferred scheduling before restoring an exception frame.
- *
- * @note     The saved frame is at sp and local IRQs are masked. Smart user
- *           returns also process pending exit requests and signals before restoration.
+ * @brief Save a synchronous exception and dispatch its saved ESTAT in C.
+ * @note The synchronous fault vectors listed below share this entry. BADV is
+ *       captured in C only for address/alignment faults; FCSR is in the frame.
+ */
+    .balign 32
+START_POINT(loongarch_exception_entry)
+    SAVE_ALL
+    move    a0, sp
+    bl      loongarch_dispatch_exception
+    b       ret_from_exception
+START_POINT_END(loongarch_exception_entry)
+
+/* Keep the vector-table symbols without emitting duplicate entry bodies. */
+.global handle_ade, handle_ale, handle_bce, handle_bp
+.global handle_fpe, handle_fpu, handle_ri
+.set handle_ade, loongarch_exception_entry
+.set handle_ale, loongarch_exception_entry
+.set handle_bce, loongarch_exception_entry
+.set handle_bp, loongarch_exception_entry
+.set handle_fpe, loongarch_exception_entry
+.set handle_fpu, loongarch_exception_entry
+.set handle_ri, loongarch_exception_entry
+
+/**
+ * @brief Save a page fault and retry the instruction after a successful repair.
+ * @note Page faults bypass deferred IRQ scheduling and user-return hooks, as
+ *       before. The saved ESTAT distinguishes load, store and permission faults.
+ */
+    .balign 32
+START_POINT(handle_tlb_load_ptw)
+    SAVE_ALL
+    csrrd   a2, LOONGARCH_CSR_BADV
+    ST      a2, sp, PT_BVADDR
+    move    a0, sp
+    bl      do_page_fault
+    b       .Lrestore_exception
+START_POINT_END(handle_tlb_load_ptw)
+
+.global handle_tlb_store_ptw, handle_tlb_modify_ptw
+.set handle_tlb_store_ptw, handle_tlb_load_ptw
+.set handle_tlb_modify_ptw, handle_tlb_load_ptw
+
+/**
+ * @brief Complete deferred scheduling for a saved interrupt/exception frame.
+ * @note sp addresses the frame and local IRQs are masked. A Smart user return
+ *       processes pending exit requests and signals before restoring registers.
  */
 START_POINT(ret_from_exception)
-ret_from_exception:
 #ifdef RT_USING_SMP
-    move a0, sp
-    bl rt_scheduler_do_irq_switch
+    move    a0, sp
+    bl      rt_scheduler_do_irq_switch
 #else
     la.abs  t0, rt_thread_switch_interrupt_flag
-    LONG_LD t1, t0, 0
-    beqz    t1, exception_resume /*resume exec*/
-    LONG_ST zero, t0, 0
+    LD      t1, t0, 0
+    beqz    t1, .Lcheck_user_return
+    ST      zero, t0, 0
 
-exception_context_switch:/*context_switch*/
     la.abs  t0, rt_interrupt_from_thread
-    LONG_LD a0, t0, 0
+    LD      a0, t0, 0
     la.abs  t0, rt_interrupt_to_thread
-    LONG_LD a1, t0, 0
-    /* Disable Interrupt*/
+    LD      a1, t0, 0
     li.w    t0, CSR_CRMD_IE
-    csrxchg  zero, t0, LOONGARCH_CSR_CRMD
-    la.abs  t0, rt_hw_context_switch
-    jirl    ra, t0, 0
-
-exception_resume:/*resume exec*/
+    csrxchg zero, t0, LOONGARCH_CSR_CRMD
+    bl      rt_hw_context_switch
 #endif
+
+.Lcheck_user_return:
 #ifdef RT_USING_SMART
-    LONG_LD t0, sp, PT_PRMD
-    andi    t0, t0, 0x3 /* extract pplv bit */
-    beqz    t0, exception_resume_kernel
-exception_resume_user:
-    la.abs  t0, arch_ret_to_user
-    jirl    ra, t0, 0
+    LD      t0, sp, PT_PRMD
+    andi    t0, t0, CSR_PRMD_PPLV
+    beqz    t0, .Lrestore_exception
+    b       arch_ret_to_user
 #endif
 
-exception_resume_kernel: /*resume_kernel*/
+.Lrestore_exception:
     RESTORE_ALL_AND_RET
-never_return:
-    b never_return
 START_POINT_END(ret_from_exception)
 
-
-exception_dispatch handle_vint, do_rt_dispatch_trap
-exception_dispatch handle_ade, do_ade, 1
-exception_dispatch handle_ale, do_ale, 1
-exception_dispatch handle_bce, do_bce
-exception_dispatch handle_bp, do_bp
-exception_dispatch handle_fpe, do_fpe, 0, 1
-exception_dispatch handle_fpu, do_fpu
-exception_dispatch handle_ri, do_ri
-
-    .align 2
-    .global trap_entry
-trap_entry:
-    /* We don't use unifid exception enter entry*/
-    b  trap_entry
-    ret
-
-
 /**
- * @brief Resolve a load, store or write-permission fault through one entry.
- * @note ESTAT in the saved frame distinguishes the operation. Keep the three
- *       exported vector targets, and return directly to retry the instruction.
- */
-.global handle_tlb_load_ptw
-.global handle_tlb_store_ptw
-.global handle_tlb_modify_ptw
-handle_tlb_load_ptw:
-handle_tlb_store_ptw:
-handle_tlb_modify_ptw:
-    SAVE_ALL
-    csrrd       a2, LOONGARCH_CSR_BADV
-    move        a0, sp
-    LONG_ST     a2, sp, PT_BVADDR
-    la.abs      t0, do_page_fault
-    jirl        ra, t0, 0
-    RESTORE_ALL_AND_RET
-
-
-/**
- * @brief    Refill a TLB entry by walking the page tables in software.
- *
- * @note     Runs in refill context without using a kernel stack. TLBRSAVE
- *           preserves t0 while PGD and the configured directory levels locate the
- *           even/odd leaf pair. Invalid leaves are handled by the page-fault path.
+ * @brief Refill a TLB entry without using the interrupted thread's stack.
+ * @note TLBRSAVE preserves t0; the walker loads the even/odd leaf pair using
+ *       the configured directory levels. Invalid leaves take the page-fault path.
  */
 START_POINT(handle_tlb_sw_refill)
-    csrwr       t0, LOONGARCH_CSR_TLBRSAVE
-    csrrd       t0, LOONGARCH_CSR_PGD
-    lddir       t0, t0, 3
-    lddir       t0, t0, 1
-    ldpte       t0, 0
-    ldpte       t0, 1
+    csrwr   t0, LOONGARCH_CSR_TLBRSAVE
+    csrrd   t0, LOONGARCH_CSR_PGD
+    lddir   t0, t0, 3
+    lddir   t0, t0, 1
+    ldpte   t0, 0
+    ldpte   t0, 1
     tlbfill
-    csrrd       t0, LOONGARCH_CSR_TLBRSAVE
+    csrrd   t0, LOONGARCH_CSR_TLBRSAVE
     ertn
 START_POINT_END(handle_tlb_sw_refill)
 
-
-# Enable and Disable Interrupt
 /**
- * @brief    Restore the local interrupt-enable bit from a saved CRMD value.
- *
- * @note     Only CRMD.IE is modified. In SMP builds this symbol is exported as
- *           rt_hw_local_irq_enable(); it does not release the global CPU lock.
- *
- * @param    level is the value in a0 returned by the matching disable operation.
+ * @brief Mask local IRQs and return the previous CRMD in a0.
+ * @note The SMP symbol is rt_hw_local_irq_disable; no global lock is acquired.
  */
-.global rt_hw_interrupt_enable
-rt_hw_interrupt_enable:
-    li.w     t0, CSR_CRMD_IE
-    csrxchg  a0, t0, LOONGARCH_CSR_CRMD
-    jirl     zero, ra, 0
+START_POINT(rt_hw_interrupt_disable)
+    move    a0, zero
+    b       rt_hw_interrupt_enable
+START_POINT_END(rt_hw_interrupt_disable)
 
 /**
- * @brief    Mask local interrupts and return the previous CRMD value.
- *
- * @note     In SMP builds this symbol is rt_hw_local_irq_disable(). It does
- *           not acquire a scheduler or global CPU lock.
- *
- * @return   The saved CRMD value in a0, for the matching restore operation.
+ * @brief Restore CRMD.IE from a0 and preserve the other CRMD fields.
+ * @param level Saved CRMD in a0, from the matching disable operation.
+ * @note The SMP symbol is rt_hw_local_irq_enable; no global lock is released.
  */
-.global rt_hw_interrupt_disable
-rt_hw_interrupt_disable:
-    move     a0, zero
-    li.w     t0, CSR_CRMD_IE
-    csrxchg  a0, t0, LOONGARCH_CSR_CRMD
-    jirl	 zero, ra, 0
+START_POINT(rt_hw_interrupt_enable)
+    li.w    t0, CSR_CRMD_IE
+    csrxchg a0, t0, LOONGARCH_CSR_CRMD
+    jr      ra
+START_POINT_END(rt_hw_interrupt_enable)
 
+/* Reserved fallback for callers without a populated vector slot. */
+START_POINT(trap_entry)
+    b       trap_entry
+START_POINT_END(trap_entry)
 
-/* Each 512-byte vector slot contains only this position-independent stub. */
-.balign 8
-.global exception_vector_stub
-exception_vector_stub:
-    csrwr t0, EXCEPTION_KS0
-    csrwr t1, EXCEPTION_KS1
-    pcaddi t0, 0
-    ld.d t0, t0, 24
-    jr t0
+/* Copied into each 512-byte vector slot. The handler pointer stays at byte 32
+ * and the complete stub stays 40 bytes, matching set_handler(). */
+    .balign 8
+START_POINT(exception_vector_stub)
+    csrwr   t0, EXCEPTION_KS0
+    csrwr   t1, EXCEPTION_KS1
+    pcaddi  t0, 0
+    LD      t0, t0, 24
+    jr      t0
     .space 12
     .dword 0
-
+START_POINT_END(exception_vector_stub)
