@@ -390,6 +390,10 @@ void do_page_fault(struct pt_regs *regs)
     
     rt_aspace_t aspace = &rt_kernel_space;
 
+    /* No address space can repair a kernel access to address zero. */
+    if (!user && regs->r_bvaddr == 0)
+        goto fatal;
+
     if (regs->r_bvaddr < USER_VADDR_TOP && lwp_self())
         aspace = lwp_self()->aspace;
     
@@ -432,8 +436,9 @@ fatal:
     }
 #endif
 
-    rt_kprintf("Kernel page fault: pc=%p address=%p\n",
-               (void *)regs->r_era, (void *)regs->r_bvaddr);
+    rt_kprintf("Kernel page fault: pc=%p address=%p ra=%p a0=%p a1=%p\n",
+               (void *)regs->r_era, (void *)regs->r_bvaddr,
+               (void *)regs->r_ra, (void *)regs->r_a0, (void *)regs->r_a1);
     rt_hw_interrupt_disable();
     while (1) {}
 }
