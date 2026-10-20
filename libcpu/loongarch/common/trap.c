@@ -374,6 +374,7 @@ void do_rt_dispatch_trap(struct pt_regs *regs)
  *
  * @note     Entered with local IRQs masked. The resolver runs with the interrupted
  *           IRQ state and may sleep; a repaired fault returns with IRQs masked again.
+ *           Kernel faults outside a schedulable context bypass the resolver.
  *           Unresolved user faults exit the process; unresolved kernel faults stop.
  *
  * @param    regs is the saved frame containing BADV, ESTAT and the interrupted mode.
@@ -390,12 +391,28 @@ void do_page_fault(struct pt_regs *regs)
     
     rt_aspace_t aspace = &rt_kernel_space;
 
-    /* No address space can repair a kernel access to address zero. */
-    if (!user && regs->r_bvaddr == 0)
+    /* Low addresses are outside the user mapping range. A fault in an ISR or
+     * scheduler critical section cannot enter the blocking VM resolver. */
+    if (!user && (regs->r_bvaddr < USER_VADDR_START ||
+                  !rt_scheduler_is_available()))
+    {
         goto fatal;
+    }
+
+#ifndef RT_USING_SMP
+    if (!user && !(regs->r_prmd & CSR_PRMD_PIE))
+    {
+        goto fatal;
+    }
+#endif
 
     if (regs->r_bvaddr < USER_VADDR_TOP && lwp_self())
         aspace = lwp_self()->aspace;
+
+    if (!aspace)
+    {
+        goto fatal;
+    }
     
     switch (code)
     {
@@ -436,10 +453,10 @@ fatal:
     }
 #endif
 
+    rt_hw_local_irq_disable();
     rt_kprintf("Kernel page fault: pc=%p address=%p ra=%p a0=%p a1=%p\n",
                (void *)regs->r_era, (void *)regs->r_bvaddr,
                (void *)regs->r_ra, (void *)regs->r_a0, (void *)regs->r_a1);
-    rt_hw_interrupt_disable();
     while (1) {}
 }
 

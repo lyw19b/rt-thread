@@ -38,7 +38,7 @@ git diff --stat
 3. **完整 Smart 用户态环境。** 当前独立 ABI 测试程序不链接 Linux 用户态 libc；尚不能代替 Smart musl、动态链接器及真实应用的验证。
 4. **实板测试。** 两款芯片的固件交接、串口时钟、次核启动、PHY、RGMII 延迟、DMA、双网口及长压均需真实硬件。QEMU `virt` 不模拟这些板载外设。
 5. 2K0300 尚无 SDIO/eMMC 存储驱动及板级复位/关机实现。2K1000 的可选 AHCI 沿用此前迁入版本，不属于已完成的网络驱动重构范围。
-6. **四核硬件 PTW 偶发页故障。** 2026-10-20 异常入口重构验证中，第三轮并行进程压力曾在 `rt_strcmp()` 发生空地址内核页故障。新旧内核各十轮独立压力未复现；归因尚未确定，不能把它写成已修复或已证实为旧问题，详见第 8 节本阶段记录。
+6. **Smart 四核并行进程压力失败。** 后续已分别捕获 procfs 遍历使用已摘除节点、LWP 重复释放 PID 引用的故障链，软件 refill 和硬件 PTW 均有失败记录。用户明确保持公共代码不变，这两项公共组件缺陷尚未修复。架构层的 MMU、IRQ 和页故障报告改动不能替代其生命周期修复，详见第 8 节。
 
 不在当前验证范围内：LSX/LASX、CPU 热插拔、主线 QEMU VirtIO PCI 网络/磁盘、完整 Smart 用户态发行环境。
 
@@ -567,6 +567,32 @@ python3 /tmp/la-cause-analysis/list_interleavings.py
 ```sh
 python3 /tmp/la-pressure-20261020/report.py
 ```
+
+### 2026-10-20：限定架构范围的页故障处理修复
+
+用户再次明确“仍只允许修改 LoongArch，保留公共代码不变”。本阶段基于 `6f84156306`，运行代码仅修改 `libcpu/loongarch/common/trap.c`，增加 `examples/test/loongarch_page_fault_test.py` 并更新本文；`components/`、`src/`、公共头文件和 BSP 配置保持不变。
+
+针对上轮 `lwp_aspace_switch+28` 访问 `0x10` 后进入缺页修复器、再触发调度断言的现场，内核页故障在以下情况下直接进入现有致命报告：地址低于有效用户映射起点、处于 ISR/调度临界区/无当前线程、选中的地址空间为空。UP 下保存的 IRQ 状态为关闭时也不进入需要调度的修复器；SMP 下仅关闭本地 IRQ、但调度仍可用的线程上下文保留原行为。致命报告前关闭本地 IRQ，不再额外获取全局 CPU 锁。正常缺页、CoW、用户故障退出和返回时的 IRQ 状态保持原策略。
+
+这解决的是架构页故障处理的次生断言和现场遮蔽，**没有修复活动 LWP 被提前释放或 procfs 节点生命周期问题**，不能据此将多核并行压力失败标记为解决。
+
+宿主检查命令：
+
+```sh
+python3 examples/test/loongarch_page_fault_test.py
+python3 examples/test/loongarch_exception_test.py
+python3 examples/test/loongarch_port_state_test.py
+```
+
+新增测试提取实际 `do_page_fault()`，在 ASan/UBSan 下通过 Smart/非 Smart、UP/SMP 共 54 个用例，检查地址空间选择、四类可修复访问、不可调度上下文、IRQ 保留、用户退出及原始异常帧。相同检查用于修改前源码时，在低地址应直接报告而仍进入修复器的分支失败。原有 192 个异常分发用例、19 个 MMU 分配/回滚/替换/回收场景及地址空间切换、syscall 状态检查均通过。
+
+重新构建八组 QEMU 配置：Nano、标准版、Smart 软件 refill、Smart 硬件 PTW，各覆盖关闭 SMP 和四核。GCC 15.2.0 构建无告警，QEMU 10.2.0 最多同时运行两个客体。复用完整 `loongarch_qemu_test.py:exercise()`，八组均完成：官方用例分别为 Nano/标准版 UP 19、四核 23，Smart UP 32、四核 36；非对齐专项通过，每组内核压力为两个工作线程各 2,000 次。四核各完成每核 1,000,000 次 SMP 校验和 1,000 轮线程回收。Smart 完成用户态基础回归、128 次顺序 fork/CoW；四核 Smart 另完成 1,000 次 TLB 压力和一轮并行 4×128，资源均恢复基线。本次常规矩阵的进程压力规模小于历史失败规模，不作为长时间稳定性验收。
+
+另外对新旧两版四核软件/硬件镜像进行受控故障对照：GDB 在 `lwp_aspace_switch+28` 的实际加载指令前将基址寄存器 `s0` 置零，再继续执行。旧版两种模式均进入 `rt_aspace_fault_try_fix()` 的调度断言；新版均直接输出 `Kernel page fault`，保存帧确认原始 ERA 为 `lwp_aspace_switch+28`、BADV=`0x10`、PRMD=`0`，没有出现该次生调度断言。注入只修改独立客体寄存器，未改源码；它验证异常处理行为，不是自然故障或原始生命周期问题的修复证明。首版验证脚本未兼容地址输出的前导零而超时，已保留记录；修正匹配后四组对照均通过。
+
+最终镜像另完成约六分钟的两客体并行压力。两种四核 Smart 均通过每核 1,000,000 次 SMP 校验、5,000 轮线程回收、三轮各 10,000 次 TLB 测试、一轮每工作线程 2,000 次内核压力和用户态基础回归；随后各完成三轮 `stress 4096`、六轮 `parallel 4 1024`。每种模式九轮进程压力后的首次资源采样均恢复到堆 78,592 字节、空闲页 31,655/31,669，未使用额外等待才达到基线。此次自然压力不加载跟踪或预设断点，软件/硬件分别耗时 361.68/358.32 秒，均完成线程列表检查并正常结束客体。本轮未复现原始失败；此前软件路径曾在第八轮才失败，且公共组件缺陷未改，因此这六轮通过仍不能作为根因已解决或长期稳定的证明。
+
+本阶段记录位于仓库外 `/tmp/la-fault-context-fix`：`summary.json` 为八组回归，`manifest.json` 为源码/镜像/配置校验值，`current-model-final.log` 和 `baseline-model-final.log` 为最终定向测试的新旧源码对照，`injection-v2-summary.json`、`inject-v2-*/` 为最终故障对照及保存帧；首版脚本记录保留在 `injection-summary.json`、`inject-*/`。`pressure/summary.json` 及各模式目录保存追加压力的全部阶段、资源采样和串口输出。全部 QEMU/GDB 已结束，BSP 配置已恢复。未进行 LS2K 实板、1/2/8/16 核或完整 Smart libc 应用验收。
 
 ## 9. 后续 Codex 的工作约定
 
