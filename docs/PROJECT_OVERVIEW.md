@@ -5,7 +5,7 @@
 ## 1. 下次启动先看这里
 
 - 当前仓库：`/home/airxs/user/aicode/kernel/rt-thread`。
-- 当前分支：`rt-loong64-v0.1`。本文整理前的代码提交为 `eac8b3f8eb`，工作区干净；启动新任务时仍应重新检查。
+- 当前分支：`rt-loong64-v0.1`。最新 CPU 重构代码提交为 `1e43f960c9`；本次验证范围见第 8 节。启动新任务时仍应重新检查提交和工作区状态。
 - 参考仓库：`/home/airxs/user/aicode/kernel/rt-thread-2k1000`。仅用于核对硬件行为和移植差异，不直接照搬其驱动结构或代码风格。
 - 当前内核版本宏为 RT-Thread 5.3.1；不能据此推断本分支与上游最新版本完全一致。
 - 先读 [AGENTS.md](../AGENTS.md)、本文及具体 BSP 的 README，再读取任务涉及的源码。
@@ -72,6 +72,8 @@ git diff --stat
 启动从 `startup_gcc.S:_start` 进入，经 `setup.c:init_cpu_early()` 初始化 CPU 异常及 Smart 页表遍历配置，然后进入 `rtthread_startup()`；启动流程调用板级 `rt_hw_board_init()` 初始化内存、串口和定时器等，随后启动调度。次核从 `loongarch_secondary_entry` 进入 `smp.c:loongarch_secondary_start()`。
 
 - 线程栈与上下文：`stack.c`、`context_gcc.S`、`cpuport.c`、`cpuport_gcc.S`、`include/stackframe.h`。修改寄存器保存布局时同时核对汇编偏移、用户上下文和信号恢复。
+- 寄存器定义：`include/loongarch_regs.h` 保存 C/汇编共用的硬件编码，`include/loongarch.h` 提供 C 访问接口。硬件数值、原有宏名和栈偏移保持兼容；`regdef.h`、`fpregdef.h` 按用户要求保留。
+- 非对齐模拟：`unaligned.c` 按表解码 28 种标量访存指令，`include/inst.h` 仅声明访问描述及模拟接口，`unaligned_gcc.S` 按字节读写。当前 `do_ale()` 仍执行致命异常策略，未接入模拟器；模拟器直接访问 live FPR，不提供访存异常修复，不能直接改接到现有异常返回路径。
 - 异常与页故障：`exception_gcc.S`、`trap.c`；页表操作在 `mmu.c`，页表遍历初始化在 `setup.c`。当前为 LP64D、4 KiB 页、三级页表，禁用 LSX/LASX。
 - SMP：`smp.c` 共用 IOCSR 邮箱和 IPI；邮箱 0 传次核入口物理地址。每核独立异常入口、时钟、栈，设备 IRQ 仍交启动核。2K1000 次核固件需处于约定的邮箱等待状态，5 秒未上线报错。
 - TLB：页表修改同步等待在线核确认失效；关中断等待自旋锁时调用 `loongarch_tlb_poll()`，避免页表锁与 IPI 相互等待。不能在确认远端失效之前回收仍可能被使用的页表。
@@ -126,7 +128,7 @@ export PATH="$RTT_EXEC_PATH:/usr/sbin:$PATH"
 
 工具链可以用 `rg --files "$HOME/local" -g '*musl-gcc' -g '*gdb' -g 'qemu-system-loongarch64'` 定位。自动测试优先用 `RTT_EXEC_PATH`；未设置时扫描 `~/local/*/bin/loongarch64-linux-musl-gcc`，因此多套工具链并存时建议显式设置。
 
-标准版/Smart 自动回归还需要 mtools 的 `mcopy`。在 Debian/Ubuntu 环境可按本机管理方式安装 `mtools`；若已有自定义安装，可设置 `MCOPY=/实际路径/mcopy` 或传 `--mcopy`。不要把工具二进制加入仓库。本次整理文档没有安装工具或重新运行回归。
+标准版/Smart 自动回归还需要 mtools 的 `mcopy`。在 Debian/Ubuntu 环境可按本机管理方式安装 `mtools`；若已有自定义安装，可设置 `MCOPY=/实际路径/mcopy` 或传 `--mcopy`。不要把工具二进制加入仓库。交接文档初稿未重新运行回归；本次 CPU 重构验证将 mtools 4.0.43 临时解包到 `/tmp/la-linux-refactor/tools`，使用其中的 `usr/bin/mcopy`，未安装到系统 PATH。后续会话应重新确认该临时路径是否存在。
 
 ```sh
 command -v scons python3 cc mkfs.fat mcopy
@@ -217,6 +219,7 @@ python3 examples/test/loongarch_qemu_test.py --mode smart --cpus 16 --ptw softwa
 脚本先替换 `.config`，启用自测及官方 utest，构建 ELF，必要时构建用户测试程序和 FAT 镜像，然后检查：
 
 - 串口输入序号、`port_test`、官方内核 utest；官方定时器压力本身包含 180 秒测试，不要仅因短期无输出就判为挂死。
+- `port_unaligned_test` 直接调用模拟器，覆盖 28 种指令、32 个目标寄存器、正负值及非对齐偏移，共 12,880 个数据访问用例；另检查拒绝的指令、零长度操作及 C/汇编帧布局。这些检查不依赖 CPU 是否原生支持非对齐访问，也不表示已启用 ALE 软件修复。
 - SMP 每核计数、原子操作、自旋锁、IPI、tick、线程迁移、FPU、线程退出及远端删除回收。
 - Smart 官方 MM/LWP 测试、实际 PTW 状态、用户读写及非法指针、信号、浮点状态、TLS/clone、RT IPC、fork/CoW/wait/exec、进程异常隔离。
 - Smart SMP 关中断的 TLB 映射切换及远端失效，顺序和并行 fork/CoW/exec 压力；每轮比较堆用量与空闲页数。
@@ -307,6 +310,7 @@ set logging enabled off
 
 ```text
 port_test 20000
+port_unaligned_test
 smp_test 1000000
 smp_reap_test 1000
 port_mmu
@@ -317,6 +321,8 @@ utest_run
 ```
 
 Smart FAT 镜像内有测试程序时，还可执行 `/user.elf`、`/user.elf stress 1024`、`/user.elf parallel 4 1024`。自动脚本产出的 `fat.img` 已含该程序；手动运行可用 `QEMU_DISK=/tmp/la-smp4/fat.img` 指定，确保所运行的内核是 Smart。
+
+`port_unaligned_test` 当前接入 QEMU BSP 的 `BSP_USING_SELFTEST`，两款 LS2K BSP 未添加此命令。
 
 在 BSP 目录下可检查镜像：
 
@@ -372,6 +378,51 @@ Smart FAT 镜像内有测试程序时，还可执行 `/user.elf`、`/user.elf st
 | `eac8b3f8eb` | 核心函数 RT-Thread 风格注释及约束说明 |
 
 历史 `/tmp` 日志或辅助脚本可能已经被清理。本次没有找到此前十六核调试的结果文件，不能把当时后台任务的中途进度记为最终通过。后续应使用仓库内测试入口重新复现，保存可追溯记录。
+
+### 2026-10-20：CPU 实现等价重构
+
+代码提交：`1e43f960c9`，基于 `454d86af1c`。先比对本地参考树 `/home/airxs/user/aicode/system/linux/linux-6.11-labcore/arch/loongarch`，确认重复主要位于非对齐模拟、指令描述、寄存器定义及异常帧宏，再进行如下调整：
+
+- 用统一访存描述表替代三组位域解码分支，保留 28 种指令及原有 GPR/live FPR 语义；字节读取仍由高地址到低地址，写入仍由低地址到高地址。
+- 用同一寄存器组描述展开异常帧、线程切换帧和浮点状态的保存/恢复；C 结构体与汇编偏移保持不变。三个页故障入口共用处理体，主核/次核共用初始化宏。
+- 将硬件定义移入 `loongarch_regs.h`，`loongarch.h` 保留访问接口，合并 ECFG 和本地 IRQ 的重复操作。硬件编码、原有常量宏、`regdef.h`、`fpregdef.h` 保持兼容。
+- 按用户要求清理代码中的来源描述注释，保留已有版权和 SPDX 标识。`do_ale()`、系统调用编号、SMP/TLB 协议和 MMU 算法未改变。
+
+本次实际验证使用 GCC 15.2.0、QEMU 10.2.0：
+
+| 配置 | UP 官方测试 | 四核官方测试 | 内核压力 |
+| --- | --- | --- | --- |
+| Nano | 19/19 | 23/23 | 每种配置 3 轮，每工作线程 20,000 次 |
+| 标准版 | 19/19 | 23/23 | 每种配置 3 轮，每工作线程 20,000 次 |
+| Smart 软件 refill | 32/32 | 36/36 | 每种配置 3 轮，每工作线程 20,000 次 |
+| Smart 硬件 PTW | 32/32 | 36/36 | 每种配置 3 轮，每工作线程 20,000 次 |
+
+八组均通过串口顺序检查及 `port_unaligned_test` 的 12,880 个数据用例、11 个不支持指令检查、零长度操作和帧布局检查。数据用例在重构前也通过。宿主 ASan/UBSan 差分检查比较了新旧解码器的 8,388,608 个指令字，结果一致；预处理宏检查确认原硬件定义保留，主核/次核启动代码的指令字节一致。
+
+四核各组均通过每核 1,000,000 次 SMP 校验及 1,000 轮线程回收；Smart 四核两种 PTW 各通过 3×1,000 轮 TLB 测试。四组 Smart 均通过用户态回归及 3×1,024 次顺序 fork/CoW，四核两组另通过 3×4×1,024 次并行 fork/CoW/exec。所有轮次资源计数与各自启动的基线一致：UP 为堆 92,896 字节、空闲页 31,603/31,690；四核为堆 119,296 字节、空闲页 31,582/31,669。
+
+执行 `/tmp/la-linux-refactor/run_matrix.py` 调用了仓库测试脚本的 `build()` / `exercise()`：串行构建八个独立 ELF，再并行运行客体。测试入口、次数及检查未削减。可用以下仓库命令复现同一配置集合（先按第 4 节设置工具路径）：
+
+```sh
+for cpus in 0 4; do
+    python3 examples/test/loongarch_qemu_test.py --mode all --parallel --cpus "$cpus" \
+        --smp-iterations 1000000 --iterations 20000 --fork-loops 1024 --repeats 3 \
+        --output "/tmp/la-refactor-${cpus}-software"
+    python3 examples/test/loongarch_qemu_test.py --mode smart --cpus "$cpus" --ptw hardware \
+        --smp-iterations 1000000 --iterations 20000 --fork-loops 1024 --repeats 3 \
+        --output "/tmp/la-refactor-${cpus}-hardware"
+done
+
+python3 examples/test/ls2k_platform_test.py
+python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k1000 \
+    --output /tmp/la-linux-refactor/ls2k1000
+python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
+    --output /tmp/la-linux-refactor/ls2k0300
+```
+
+两款 LS2K 的 6/10 种配置均交叉构建通过，无编译告警；平台模型及 ASan/UBSan GMAC 模型通过。三个 BSP 的 `.config`、`rtconfig.h` 均已恢复。日志、配置快照、ELF、基线源码及差分结果位于仓库外 `/tmp/la-linux-refactor`，最终汇总为 `summary.json`；这些临时文件可能被清理，不能作为以后会话必然存在的证据。
+
+本轮未重测 1/2/8/16 核，未进行实板验证或完整 Smart libc 应用验证。第 2 节所列十六核组合长压问题继续保留，不能据本次四核通过判定已解决。
 
 ## 9. 后续 Codex 的工作约定
 
