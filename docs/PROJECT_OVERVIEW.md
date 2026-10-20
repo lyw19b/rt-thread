@@ -467,6 +467,12 @@ python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
 
 同一最终源码还完成 Nano 单核配置交叉构建、QEMU 启动及 `port_test 200`。在 Smart 四核 QEMU 的独立调试会话中，GDB 于 `proc_dump /1` 的 `rt_strcmp()` 入口人为将 `a0` 置零，内核按预期输出故障 PC、空地址、`_proc_find()` 内的返回地址及 `a0=(nil)`，验证了新的空地址故障报告；这是受控注入，不是自然故障复现。相关记录保存在同一仓库外目录。
 
+继续定位时，Smart 四核硬件 PTW 临时关闭 `RT_USING_DFS_PROCFS`，未改 `components/` 源码，用户态回归可通过，但并行 fork 压力仍会触发 `_rt_mutex_take()` 的对象类型断言。断言处 GDB 显示，仍在 CPU 上运行的用户线程所属 LWP 已有 `ref=0`、`pid=0`、`aspace=NULL`，其 `lwp_lock` 类型也已被清零。这说明该次断言和先前 `lwp_aspace_switch()` 空地址故障都能由活动线程的 LWP 被提前释放解释，且这条故障链不依赖 procfs。
+
+在未修改的 `lwp_pid_put()` 中设置仅命中 `pid==0` 路径的指令断点，又捕获一次重复释放：`lwp_thread_exit()` 经 `lwp_terminate()` 调用 `lwp_pid_put()` 时，传入 LWP 已是 `pid=0`、`ref=1`，线程还在其线程组中。该函数即使未找到 PID 仍继续执行 `lwp_ref_dec()`，使最后一个引用归零；随后地址空间和互斥量被释放。结合 `_stats_and_reap_child()` 可在子进程完成 `_resr_cleanup()` 前先回收 PID、解除父子关系，而 `_resr_cleanup()` 在观察到 `parent=NULL` 时也调用 `lwp_pid_put()`，存在明确的重复释放时序。最小正确修复需要在通用 LWP 的 PID 回收处以 PID 锁保护“仅首次释放才递减引用”的判断，并维持 `/proc` 节点与 PID 的同步；不能在 LoongArch 缺页或上下文切换路径中跳过损坏对象来替代该修复。用户要求不修改 `components/` 等公共代码，因此目前只记录证据，**未修复这项生命周期故障**。它是否也是最初 `rt_strcmp()` 故障的根因尚未证实。
+
+本轮调试日志和 ELF 位于仓库外 `/tmp/la-null-fault/no-procfs-diagnostic/`，其中 `pid0-break-gdb.log` 为重复释放现场，`assert-details-gdb.log` 为活动线程使用已释放 LWP 的现场。另构建 Smart 四核软件 refill 运行一轮 4×1,024 并行压力，运算完成，但堆占用比该次启动基线多 2,608 字节，等待 20 秒后未恢复；此观察不能直接证明持续泄漏，记录于 `/tmp/la-null-fault/software-diagnostic/`。两次构建后 BSP `.config` 和 `rtconfig.h` 均已恢复，未进行完整矩阵或实板验收。
+
 ## 9. 后续 Codex 的工作约定
 
 - 用户最新任务决定本轮改动范围；本文是交接资料，不是要求每次自动展开所有待办。
