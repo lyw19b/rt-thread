@@ -505,6 +505,40 @@ ASan/UBSan 下 19 个 MMU 分配失败/替换/回收场景、地址空间切换�
 
 镜像、配置、宿主对照结果、串口日志、GDB 记录及测试脚本均在仓库外 `/tmp/la-port-fix`。首轮汇总为 `summary.json`，四核复测为 `replay-summary.json`；复测故障现场为 `replay-smart-4-software/address-error-gdb.log`、`replay-smart-4-hardware/proc-loop-gdb.log`；扩展压力现场为 `stress-software/proc-loop-gdb.log` 和 `stress-hardware/proc-loop-gdb.log`；实际切换验证为 `verify-fork/gdb.log`、`verify-exec/gdb.log`。QEMU BSP `.config` 和生成的 `rtconfig.h` 已恢复。本阶段未测试 LS2K 实板、1/2/8/16 核 SMP 或完整 Smart libc 应用。
 
+### 2026-10-20：捕获 procfs 遍历与摘除的实际读写链
+
+本轮继续分析 `dbcb780b13` 的压力故障，复用 `/tmp/la-port-fix` 的配套 ELF 和磁盘镜像，没有修改内核、公共组件、架构源码或 BSP 配置。先核对上轮异常帧与 ELF，再通过 QEMU 内存访问跟踪记录 procfs 指令的实际访存，触发后才连接 GDB。跟踪会影响调度时序，但未注入分配失败、改写客体数据或寄存器。逐次 GDB 断点的早期尝试明显拖慢客体，未捕获目标重叠，不能计为压力通过。
+
+**硬件 PTW 已捕获具体写入者和后续读者。** 四核 `/user.elf parallel 4 1024` 完成第一轮，第二轮在创建 PID 8256 时停滞。节点地址为 `0x900000000037f6b0`，其 `sibling` 地址为 `0x900000000037f6d8`。跟踪中连续出现：
+
+| 回调序号 | CPU（从 0 编号） | 指令 | 实际访存 |
+| --- | --- | --- | --- |
+| 13282939 | 0 | `proc_find+492`，`0x90000000002118ec` | 从前驱 `0x900000000037e848` 读取并缓存下一节点 `0x900000000037f6d8` |
+| 13282943 | 1 | `proc_remove_dentry+124` | 将该前驱的 `next` 改为后继 `0x900000000037fae8`，完成摘链 |
+| 13282945 | 1 | `proc_remove_dentry+132`，`0x9000000000212604` | 向 `0x900000000037f6d8` 写入自身地址 |
+| 13282955 | 0 | `proc_find+516`，`0x9000000000211904` | 沿之前缓存的节点读取 `next`，读到 `0x900000000037f6d8` 自环 |
+
+这些序号表示宿主跟踪回调的记录顺序，并非全部客体访存的全局硬件顺序；结论依据上述普通加载、存储的地址和值。GDB 随后确认 CPU 0 的 `_proc_find()` 中 `dentry` 和 `tmp` 都等于该节点，正在查找 `"8256"`，另外三个 CPU 已进入 idle。该现场定位到 **遍历仍使用已摘除节点**：删除时把节点设为自环是链表删除函数的正常动作，错误在于另一个核仍沿未受生命周期保护的缓存指针继续遍历。这次并不需要先假设根目录链表已损坏，也不需要由 TLB 等待解释停滞。
+
+同样的跟踪用于四核软件 refill，连续六轮 `parallel 4 1024` 均输出 `SMART PARALLEL PASS`，未触发自环或代码区目录项检测。该复测未进行每轮资源基线核对，也不包含完整官方测试；不能据此宣称软件路径稳定或推翻先前软件 refill 的失败记录。两种模式均已结束客体，硬件第二轮未完成的部分不计为通过。
+
+源码和当前 ELF 一致：`_proc_find()` 使用的 `rt_list_for_each_entry_safe` 只预存下一节点，不能保障另一个 CPU 不删除该节点；匹配成功之后才调用 `proc_acquire()`，遍历期间没有取得节点引用。PID 创建在 PID 锁内调用 `proc_pid()`，但 `lwp_pid_put()` 在取得 PID 锁之前就执行 `proc_remove_dentry()`，两条路径可以重叠。当前配置启用 `RT_USING_STDC_ATOMIC`，引用加减已编译为 `amadd_db.d`，不能误报为普通非原子加减；原子计数仍不能自动保护链表遍历、摘除与释放这组操作。
+
+**上轮软件 refill 的非法字符串地址也已进一步解码。** 保存的 `s2=0x9000000000252f48` 实际位于代码区，是 `_anon_varea_expand-40`，不是堆中的目录项。按当前 `struct proc_dentry` 布局，查找器从 `s2+96` 读取 `name`；ELF 中该位置恰为 `_pgmgr_pop_range+8` 的两条指令 `0x29c08079`、`0x29c0607a`，合成的 64 位值精确等于保存的 `a0/BADV=0x29c0607a29c08079`。`s2+40` 读取的代码字再减 40，也精确等于保存的 `s3`。这些关系已用配套 ELF 自动断言验证，说明这份现场与普通链表加载、偏移计算一致。
+
+`rt_private_ctx.mem_obj.on_varea_expand` 与 `proc_dentry.node.sibling.next` 都在各自结构的偏移 40，且前者保存 `_anon_varea_expand`。因此，失效目录项内存被匿名映射对象复用，是上述代码地址进入遍历链的一条具体解释；**原异常帧没有保留前一个堆节点的地址，本轮尚未捕获该次分配/复用过程，不能将此解释写成已证实的释放后使用全过程**。
+
+对上轮“`next` 为自身、`prev` 为根目录头”的另一种现场，另按当前 ELF 中摘链的两次加载、四次存储顺序，枚举两个相邻节点并发删除的 924 种交错。严格顺序一致的内存模型下，94 种交错就能留下这种形态。模型结果不是历史故障的实际写入记录，但证明仅增加 LoongArch 内存屏障不足以排除此风险。
+
+本轮确认的修复边界是 procfs 遍历、增删和引用释放之间的生命周期同步；之前已捕获的 LWP 重复 PID 释放仍是另一项待修问题，不能将两条链合并为同一次故障。用户禁止修改公共代码，因此本轮只补充证据，没有把停滞标记为修复，也没有重新执行完整构建/官方测试矩阵。
+
+调试工具与原始记录保存在仓库外 `/tmp/la-cause-analysis`：`hardware-events.log` 为触发前最后 1,048,576 条访存回调；`hardware-chain.log` 为自动检查通过的上述读写链；`hardware-trace-gdb.log`、`hardware-trace-guest.log` 为对应栈和串口记录；`software-trace-driver.log`、`software-trace-guest.log` 为六轮软件 refill 记录；`saved-frame-verified.log` 为旧异常帧与 ELF 的算术核对；`list-interleavings.log` 为相邻删除模型。可复查命令：
+
+```sh
+python3 /tmp/la-cause-analysis/analyze_trace.py hardware
+python3 /tmp/la-cause-analysis/list_interleavings.py
+```
+
 ## 9. 后续 Codex 的工作约定
 
 - 用户最新任务决定本轮改动范围；本文是交接资料，不是要求每次自动展开所有待办。
