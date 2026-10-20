@@ -5,7 +5,7 @@
 ## 1. 下次启动先看这里
 
 - 当前仓库：`/home/airxs/user/aicode/kernel/rt-thread`。
-- 当前分支：`rt-loong64-v0.1`。最新 CPU 重构代码提交为 `17928ab622`；本次验证范围及未解决的压力故障见第 8 节。启动新任务时仍应重新检查提交和工作区状态。
+- 当前分支：`rt-loong64-v0.1`。CPU 异常入口重构提交为 `17928ab622`；此后的故障定位、MMU/syscall 修复及验证范围见第 8 节。启动新任务时仍应重新检查提交和工作区状态。
 - 参考仓库：`/home/airxs/user/aicode/kernel/rt-thread-2k1000`。仅用于核对硬件行为和移植差异，不直接照搬其驱动结构或代码风格。
 - 当前内核版本宏为 RT-Thread 5.3.1；不能据此推断本分支与上游最新版本完全一致。
 - 先读 [AGENTS.md](../AGENTS.md)、本文及具体 BSP 的 README，再读取任务涉及的源码。
@@ -236,6 +236,7 @@ python3 examples/test/loongarch_qemu_test.py --mode smart --cpus 16 --ptw softwa
 ```sh
 python3 examples/test/ls2k_platform_test.py
 python3 examples/test/loongarch_exception_test.py
+python3 examples/test/loongarch_port_state_test.py
 python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k1000 \
     --output /tmp/ls2k1000-check
 python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
@@ -245,6 +246,8 @@ python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
 `ls2k_platform_test.py` 验证两种芯片的 UART、时钟、中断路由/确认/屏蔽和 DMA 通路，临时目录自动删除。GMAC 脚本默认先跑 ASan/UBSan 宿主模型，验证 MDIO 超时、PHY、环回绕、OWN 顺序、坏帧和 lwIP 通知失败重试，两个端口模型各 100,000 帧；`--build` 再跑所选 BSP 的构建矩阵。仅测模型时省略 `--build`。
 
 `loongarch_exception_test.py` 用宿主 C 编译器和 ASan/UBSan 检查实际同步异常 C 分发函数：64 个异常码、3 种其他 `ESTAT` 位组合，共 192 例，验证处理函数选择及 BADV 读取/保存范围。它不替代 QEMU 的真实异常入口测试；Smart 用户态回归另覆盖特权指令、非法指令、断点和边界检查异常的进程隔离。
+
+`loongarch_port_state_test.py` 提取实际 MMU 和 syscall C 实现，用 ASan/UBSan 检查 19 个页表分配失败、跨 2 MiB/1 GiB 边界替换及回收用例，并检查地址空间切换的 IRQ 保护、硬件页表查询和 Smart/非 Smart DFS 的 syscall IRQ 状态。模型替换页分配器、CSR 和地址别名，不验证真实指令或内存屏障时序，需配合 QEMU 回归。
 
 2K1000 矩阵为 6 种配置，2K0300 为 10 种，包含网络边界配置、SMP/UP，后者还包含 Nano、Smart、UART9 和 Smart 双网口。脚本检查配置生效、编译告警以及 DMA 段布局。它同样会恢复配置，但不重建恢复后的 ELF。模型不模拟电气与总线时序，也不代表真实吞吐。
 
@@ -472,6 +475,35 @@ python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
 在未修改的 `lwp_pid_put()` 中设置仅命中 `pid==0` 路径的指令断点，又捕获一次重复释放：`lwp_thread_exit()` 经 `lwp_terminate()` 调用 `lwp_pid_put()` 时，传入 LWP 已是 `pid=0`、`ref=1`，线程还在其线程组中。该函数即使未找到 PID 仍继续执行 `lwp_ref_dec()`，使最后一个引用归零；随后地址空间和互斥量被释放。结合 `_stats_and_reap_child()` 可在子进程完成 `_resr_cleanup()` 前先回收 PID、解除父子关系，而 `_resr_cleanup()` 在观察到 `parent=NULL` 时也调用 `lwp_pid_put()`，存在明确的重复释放时序。最小正确修复需要在通用 LWP 的 PID 回收处以 PID 锁保护“仅首次释放才递减引用”的判断，并维持 `/proc` 节点与 PID 的同步；不能在 LoongArch 缺页或上下文切换路径中跳过损坏对象来替代该修复。用户要求不修改 `components/` 等公共代码，因此目前只记录证据，**未修复这项生命周期故障**。它是否也是最初 `rt_strcmp()` 故障的根因尚未证实。
 
 本轮调试日志和 ELF 位于仓库外 `/tmp/la-null-fault/no-procfs-diagnostic/`，其中 `pid0-break-gdb.log` 为重复释放现场，`assert-details-gdb.log` 为活动线程使用已释放 LWP 的现场。另构建 Smart 四核软件 refill 运行一轮 4×1,024 并行压力，运算完成，但堆占用比该次启动基线多 2,608 字节，等待 20 秒后未恢复；此观察不能直接证明持续泄漏，记录于 `/tmp/la-null-fault/software-diagnostic/`。两次构建后 BSP `.config` 和 `rtconfig.h` 均已恢复，未进行完整矩阵或实板验收。
+
+### 2026-10-20：LoongArch MMU 和 syscall 状态修复
+
+本阶段基于 `b6d1dfa1da`，仅修改 `libcpu/loongarch/common/mmu.c`、`syscall_c.c`，增加架构专项宿主测试并更新本文；未修改 `components/`、`src/` 或公共头文件。此前发现的非 16 字节栈顶下 fork/clone 帧定位问题位于 `components/lwp/arch/loongarch`，本阶段未改；FPU 禁用时异常保存可能再次触发异常的静态审计项也未纳入本次修复。
+
+- `rt_hw_aspace_switch()` 在函数内部保存并关闭本地 IRQ，完成 PGDL 写入和本地 TLB 失效后恢复原状态。删除每核软件页表记录，`rt_hw_mmu_tbl_get()` 直接读取 PGDL，避免迁核时更新错误 CPU 的记录。
+- 映射先按 2 MiB 叶表范围准备全部所需页表，再写叶子映射。分配失败仅回收空页表，不修改原有叶子项；包含“中间目录已分配、下一层分配失败”的路径。回收仍等待跨核 TLB 失效后再释放页表页。
+- Smart 内核态 syscall 和非 Smart DFS syscall 按保存的 PRMD.PIE 设置执行期间的 IRQ 状态，返回前关闭 IRQ。用户态 syscall 编号、参数和返回路径保持不变。
+
+定向检查：
+
+```sh
+python3 examples/test/loongarch_port_state_test.py
+python3 examples/test/loongarch_exception_test.py
+```
+
+ASan/UBSan 下 19 个 MMU 分配失败/替换/回收场景、地址空间切换模型、Smart/非 Smart DFS syscall 模型及 192 个同步异常分发用例均通过。将同一 MMU 和 syscall 检查用于未修改的 `b6d1dfa1da` 源码，分别因残留页表和错误打开 IRQ 而失败。QEMU 四核硬件 PTW 的实际 fork、exec 路径通过 GDB 验证：PGDL 写入前 CRMD 为 `0xb0`，失效后 PGDL 等于目标页表，函数返回后 CRMD 恢复为 `0xb4`。
+
+使用 GCC 15.2.0、QEMU 10.2.0，`/tmp/la-port-fix/run_matrix.py` 顺序构建八组 UP/四核配置，再复用 `loongarch_qemu_test.py` 的完整 `exercise()`。八组构建无告警。四组 UP 均完整通过：Nano/标准版官方测试各 19/19，Smart 软件/硬件 PTW 各 32/32；每组三轮内核压力各工作线程 20,000 次，两组 Smart 各三轮 1,024 次顺序 fork/CoW，资源恢复到各自基线。四核首轮在官方线程延时或定时器的 tick 精确相等断言处失败，未将其记为通过；首轮日志保留，后续复测单独记录。
+
+随后 `/tmp/la-port-fix/replay_smp.py` 将独立客体并发限制为两个，使用相同 ELF 完整复测四核官方用例，未修改断言或删除测试。Nano/标准版各 23/23、Smart 软件/硬件 PTW 各 36/36 均通过。首轮时序断言没有再次出现，但未将降低客体并发直接认定为唯一原因。四组随后各三轮、每工作线程 20,000 次内核压力均通过。四核两组 Smart 各三轮 1,000 次 TLB 测试及用户态基础回归通过。所有四核配置还通过每核 1,000,000 次 SMP 校验、1,000 轮线程回收和非对齐专项。
+
+完整前置测试后的进程压力仍失败：软件 refill 完成三轮顺序 1,024 次、两轮并行 4×1,024 次，第三轮并行中发生内核地址异常；硬件 PTW 完成两轮顺序、一轮并行，第二轮并行中再次发生 procfs 遍历停滞。已完成并行轮次的资源均恢复为堆 119,296 字节、空闲页 31,582/31,669。硬件现场有两个 CPU 分别沿 PID 创建和删除路径遍历同一个节点，节点 `next` 指向自身而不是根目录链表头，连续采样保持不变。软件异常帧为 PRMD=`4`、ERA=`0x9000000000265980`（`rt_strcmp`）、RA=`0x9000000000211924`（内联 `_proc_find` 的 `proc_find+548`）、BADV/a0=`0x29c0607a29c08079`，确认本次非法字符串指针来自 procfs 查找路径；尚未捕获最初破坏节点的写操作。其他 CPU 此时停在等待 TLB 确认处，不能仅凭这些等待栈把该次故障归为 TLB 协议死锁。保存现场后终止两个失败客体，第三轮未完成的部分不计为通过。
+
+另外使用新构建的四核 Smart 镜像，各计划 12 轮 `parallel 4 1024` 压力，允许每轮结束后等待 20 秒回收。软件 refill 在第一轮停滞；硬件 PTW 前三轮完成，资源均为堆 78,592 字节、空闲页 31,655/31,669，第四轮停滞。两者都捕获到 `_proc_find()` 反复遍历一个已经自环的 `sibling` 节点，其 `next/prev` 等于节点自身，且该节点不是根目录的链表头；调用链为 `proc_pid()` → `lwp_create()` → `_sys_fork()`。这是本轮自然压力现场，未注入分配失败或修改客体代码。保存多次 GDB 采样后主动终止两个停滞客体，不能把终止产生的 EOF 当作原始故障，也不能把计划的 12 轮记成完成。
+
+该现场确认修复后仍有 procfs 遍历停滞，符合无统一保护的目录遍历/删除发生重叠的风险；未据此宣称已经捕获最初修改链表的指令，也未将此前 PID 重复释放、空地址页故障全部归为同一根因。公共代码保持不变，系统仍未通过多核长时间稳定性验收。
+
+镜像、配置、宿主对照结果、串口日志、GDB 记录及测试脚本均在仓库外 `/tmp/la-port-fix`。首轮汇总为 `summary.json`，四核复测为 `replay-summary.json`；复测故障现场为 `replay-smart-4-software/address-error-gdb.log`、`replay-smart-4-hardware/proc-loop-gdb.log`；扩展压力现场为 `stress-software/proc-loop-gdb.log` 和 `stress-hardware/proc-loop-gdb.log`；实际切换验证为 `verify-fork/gdb.log`、`verify-exec/gdb.log`。QEMU BSP `.config` 和生成的 `rtconfig.h` 已恢复。本阶段未测试 LS2K 实板、1/2/8/16 核 SMP 或完整 Smart libc 应用。
 
 ## 9. 后续 Codex 的工作约定
 

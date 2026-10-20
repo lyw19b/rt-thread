@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <rtthread.h>
+#include <rthw.h>
 #include <ioremap.h>
 #include <mm_private.h>
 #include "mmu.h"
 #include "loongarch.h"
 
 rt_align(ARCH_PAGE_SIZE) rt_ubase_t MMUTable[512];
-static void *current_mmu_table[RT_CPUS_NR];
 
 static rt_ubase_t *table_from_entry(rt_ubase_t entry)
 {
@@ -66,7 +66,7 @@ static rt_bool_t table_empty(rt_ubase_t *table)
 }
 
 /**
- * @brief    Remove a leaf mapping and reclaim empty intermediate tables.
+ * @brief    Reclaim empty tables, optionally removing a leaf mapping first.
  *
  * @note     Remote TLB invalidation completes before a page-table page is freed.
  *           The mapped data page remains owned by the address-space layer.
@@ -75,29 +75,32 @@ static rt_bool_t table_empty(rt_ubase_t *table)
  *
  * @param    va is the page-aligned virtual address to unmap.
  *
- * @return   The number of bytes to skip: one page, or the rest of an absent subtree.
+ * @param    unmap selects leaf removal; false preserves all existing mappings.
+ *
+ * @return   Bytes to skip before the next leaf or subtree requiring inspection.
  */
-static size_t unmap_page(rt_aspace_t aspace, rt_ubase_t va)
+static size_t release_page(rt_aspace_t aspace, rt_ubase_t va, rt_bool_t unmap)
 {
     rt_ubase_t *root = aspace->page_table;
     rt_ubase_t *mid, *leaf;
     unsigned int i = (va >> 30) & 511;
     unsigned int j = (va >> 21) & 511;
+    size_t span = (1UL << 21) - (va & ((1UL << 21) - 1));
 
     if (!root[i])
         return (1UL << 30) - (va & ((1UL << 30) - 1));
     
     mid = table_from_entry(root[i]);
     
-    if (!mid[j])
-        return (1UL << 21) - (va & ((1UL << 21) - 1));
+    if (mid[j])
     {
         leaf = table_from_entry(mid[j]);
-        
-        if (!leaf[(va >> 12) & 511])
-            return ARCH_PAGE_SIZE;
-        
-        leaf[(va >> 12) & 511] = 0;
+
+        if (unmap)
+        {
+            leaf[(va >> 12) & 511] = 0;
+            span = ARCH_PAGE_SIZE;
+        }
         
         if (table_empty(leaf))
         {
@@ -114,7 +117,7 @@ static size_t unmap_page(rt_aspace_t aspace, rt_ubase_t va)
         rt_pages_free(mid, 0);
     }
     
-    return ARCH_PAGE_SIZE;
+    return span;
 }
 
 /**
@@ -122,6 +125,7 @@ static size_t unmap_page(rt_aspace_t aspace, rt_ubase_t va)
  *
  * @note     Takes the page-table lock and completes TLB invalidation on all online
  *           CPUs before returning. Existing leaf entries in the range may be replaced.
+ *           Allocation failure leaves existing mappings intact.
  *
  * @param    aspace is the address space to update.
  *
@@ -146,24 +150,26 @@ void *rt_hw_mmu_map(rt_aspace_t aspace, void *vaddr, void *paddr,
         return RT_NULL;
     MM_PGTBL_LOCK(aspace);
     
-    for (done = 0; done < size; done += ARCH_PAGE_SIZE)
+    /* Reserve all tables before replacing any leaf. Each leaf table covers 2 MiB. */
+    for (done = 0; done < size;)
     {
-        rt_ubase_t *pte = walk(aspace, va + done, RT_TRUE);
-        
-        if (!pte)
+        if (!walk(aspace, va + done, RT_TRUE))
         {
-            /* Also release empty tables allocated for the failed page. */
-            unmap_page(aspace, va + done);
-            while (done)
-            {
-                done -= ARCH_PAGE_SIZE;
-                unmap_page(aspace, va + done);
-            }
-            loongarch_tlb_flush_all();
+            size_t offset;
+
+            /* Include the partially allocated path of the failed walk. */
+            for (offset = 0; offset <= done;)
+                offset += release_page(aspace, va + offset, RT_FALSE);
             MM_PGTBL_UNLOCK(aspace);
             return RT_NULL;
         }
-        
+        done += (1UL << 21) - ((va + done) & ((1UL << 21) - 1));
+    }
+
+    for (done = 0; done < size; done += ARCH_PAGE_SIZE)
+    {
+        rt_ubase_t *pte = walk(aspace, va + done, RT_FALSE);
+
         /* The aspace layer may replace a leaf while expanding a mapping. */
         /* PTW tests Present (bit 7), while software refill uses Valid (bit 0).
          * Keep both so the same page tables work with either refill path. */
@@ -197,7 +203,7 @@ void rt_hw_mmu_unmap(rt_aspace_t aspace, void *vaddr, size_t size)
     
     /* Large user reservations are sparse: skip absent page-table subtrees. */
     for (offset = 0; offset < size;)
-        offset += unmap_page(aspace, (rt_ubase_t)vaddr + offset);
+        offset += release_page(aspace, (rt_ubase_t)vaddr + offset, RT_TRUE);
     
     loongarch_tlb_flush_all();
     MM_PGTBL_UNLOCK(aspace);
@@ -234,27 +240,32 @@ void *rt_hw_mmu_v2p(rt_aspace_t aspace, void *vaddr)
 /**
  * @brief    Install the local CPU user page-table root and discard its TLB entries.
  *
- * @note     The caller must prevent CPU migration during the switch. PGDH remains
- *           unchanged; the kernel mapping is shared across address spaces.
+ * @note     Masks local IRQs until the root and TLB agree, preventing migration
+ *           even when called from fork or exec. Preserves the caller's IRQ state.
+ *           PGDH remains unchanged; the kernel mapping is shared across address spaces.
  *
  * @param    aspace is the address space to activate.
  */
 void rt_hw_aspace_switch(rt_aspace_t aspace)
 {
+    rt_base_t level = rt_hw_local_irq_disable();
     rt_ubase_t pa = ARCH_PAGE_PA_MASK(aspace->page_table);
-    current_mmu_table[rt_hw_cpu_id()] = aspace->page_table;
+
     csr_write64(pa, LOONGARCH_CSR_PGDL);
     rt_hw_tlb_invalidate_all_local();
+    rt_hw_local_irq_enable(level);
 }
 
 /**
- * @brief    Get the page-table root last installed on the local CPU.
+ * @brief    Read the user page-table root installed in the local CPU.
  *
- * @return   The root table virtual address, or RT_NULL before the first switch.
+ * @return   The root table virtual address, or RT_NULL when PGDL is zero.
  */
 void *rt_hw_mmu_tbl_get(void)
 {
-    return current_mmu_table[rt_hw_cpu_id()];
+    rt_ubase_t pa = csr_read64(LOONGARCH_CSR_PGDL);
+
+    return pa ? table_from_entry(pa) : RT_NULL;
 }
 
 /**

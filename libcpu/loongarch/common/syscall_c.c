@@ -6,6 +6,7 @@
 #include <rtthread.h>
 #include <rthw.h>
 #include "stack.h"
+#include "loongarch.h"
 #ifdef RT_USING_SMART
 #include <lwp_arch.h>
 #include <lwp_ipc.h>
@@ -19,8 +20,8 @@ typedef rt_ubase_t (*loongarch_syscall_t)(rt_ubase_t, rt_ubase_t, rt_ubase_t,
  * @brief    Dispatch a Smart system call from the saved exception frame.
  *
  * @note     User calls use the official RT-Thread table. Kernel-mode libc calls
- *           use the separate kernel musl adapter. Local IRQs are enabled while
- *           executing a call and masked again before register restoration. Fork sees
+ *           use the separate kernel musl adapter and preserve the interrupted IRQ
+ *           state. User calls run with IRQs enabled; all returns mask IRQs. Fork sees
  *           the original ERA; ordinary calls then advance ERA past the syscall.
  *
  * @param    regs is the saved frame containing a7 and arguments a0-a6.
@@ -33,7 +34,7 @@ void rt_dispatch_syscall(struct pt_regs *regs)
     if (!(regs->r_prmd & 3))
     {
         extern rt_base_t loongarch_kernel_syscall(struct pt_regs *regs);
-        rt_hw_local_irq_enable(4);
+        rt_hw_local_irq_enable(regs->r_prmd & CSR_PRMD_PIE);
         regs->r_a0 = loongarch_kernel_syscall(regs);
         rt_hw_local_irq_disable();
         regs->r_era += 4;
@@ -69,7 +70,8 @@ void rt_dispatch_syscall(struct pt_regs *regs)
  * @brief    Handle kernel libc system calls in a non-Smart build.
  *
  * @note     DFS builds route supported calls to the kernel adapter. Other builds
- *           return -RT_ENOSYS. The exception return path expects local IRQs masked.
+ *           return -RT_ENOSYS. Calls preserve the interrupted IRQ state, then mask
+ *           local IRQs for the exception return path.
  *
  * @param    regs is the saved frame; a0 receives the result and ERA advances.
  */
@@ -77,7 +79,7 @@ void rt_dispatch_syscall(struct pt_regs *regs)
 {
 #ifdef RT_USING_DFS
     extern rt_base_t loongarch_kernel_syscall(struct pt_regs *regs);
-    rt_hw_local_irq_enable(4);
+    rt_hw_local_irq_enable(regs->r_prmd & CSR_PRMD_PIE);
     regs->r_a0 = loongarch_kernel_syscall(regs);
     rt_hw_local_irq_disable();
 #else
