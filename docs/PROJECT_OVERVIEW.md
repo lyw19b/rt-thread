@@ -5,7 +5,7 @@
 ## 1. 下次启动先看这里
 
 - 当前仓库：`/home/airxs/user/aicode/kernel/rt-thread`。
-- 当前分支：`rt-loong64-v0.1`。最新 CPU 重构代码提交为 `1e43f960c9`；本次验证范围见第 8 节。启动新任务时仍应重新检查提交和工作区状态。
+- 当前分支：`rt-loong64-v0.1`。最新 CPU 重构代码提交为 `17928ab622`；本次验证范围及未解决的压力故障见第 8 节。启动新任务时仍应重新检查提交和工作区状态。
 - 参考仓库：`/home/airxs/user/aicode/kernel/rt-thread-2k1000`。仅用于核对硬件行为和移植差异，不直接照搬其驱动结构或代码风格。
 - 当前内核版本宏为 RT-Thread 5.3.1；不能据此推断本分支与上游最新版本完全一致。
 - 先读 [AGENTS.md](../AGENTS.md)、本文及具体 BSP 的 README，再读取任务涉及的源码。
@@ -25,7 +25,7 @@ git diff --stat
 
 | 目标 | 配置与默认核数 | Smart / 页表遍历 | 验证边界 |
 | --- | --- | --- | --- |
-| QEMU LoongArch `virt` | Nano、标准版、Smart；默认 SMP 4 核，可关闭 SMP，配置范围 1～16 核 | 软件 refill、硬件 PTW | 已有回归及压力记录；16 核组合长压仍有未关闭问题 |
+| QEMU LoongArch `virt` | Nano、标准版、Smart；默认 SMP 4 核，可关闭 SMP，配置范围 1～16 核 | 软件 refill、硬件 PTW | 已有回归及压力记录；16 核停滞及四核硬件 PTW 偶发页故障待定位 |
 | LS2K1000LA | 标准版、网络版；默认 SMP 2 核，可改 1 核或关闭 SMP | **板级 Smart 内存初始化未移植**；芯片只允许软件 refill | 交叉编译、宿主驱动模型通过；未实板启动或联网验收 |
 | LS2K0300 | Nano、标准版、网络版、Smart；默认开启 SMP 框架，限定 1 核 | 软件 refill；Smart 使用临时根文件系统 | 交叉编译、宿主驱动模型通过；未实板验收 |
 
@@ -38,6 +38,7 @@ git diff --stat
 3. **完整 Smart 用户态环境。** 当前独立 ABI 测试程序不链接 Linux 用户态 libc；尚不能代替 Smart musl、动态链接器及真实应用的验证。
 4. **实板测试。** 两款芯片的固件交接、串口时钟、次核启动、PHY、RGMII 延迟、DMA、双网口及长压均需真实硬件。QEMU `virt` 不模拟这些板载外设。
 5. 2K0300 尚无 SDIO/eMMC 存储驱动及板级复位/关机实现。2K1000 的可选 AHCI 沿用此前迁入版本，不属于已完成的网络驱动重构范围。
+6. **四核硬件 PTW 偶发页故障。** 2026-10-20 异常入口重构验证中，第三轮并行进程压力曾在 `rt_strcmp()` 发生空地址内核页故障。新旧内核各十轮独立压力未复现；归因尚未确定，不能把它写成已修复或已证实为旧问题，详见第 8 节本阶段记录。
 
 不在当前验证范围内：LSX/LASX、CPU 热插拔、主线 QEMU VirtIO PCI 网络/磁盘、完整 Smart 用户态发行环境。
 
@@ -72,9 +73,11 @@ git diff --stat
 启动从 `startup_gcc.S:_start` 进入，经 `setup.c:init_cpu_early()` 初始化 CPU 异常及 Smart 页表遍历配置，然后进入 `rtthread_startup()`；启动流程调用板级 `rt_hw_board_init()` 初始化内存、串口和定时器等，随后启动调度。次核从 `loongarch_secondary_entry` 进入 `smp.c:loongarch_secondary_start()`。
 
 - 线程栈与上下文：`stack.c`、`context_gcc.S`、`cpuport.c`、`cpuport_gcc.S`、`include/stackframe.h`。修改寄存器保存布局时同时核对汇编偏移、用户上下文和信号恢复。
+- 汇编指令别名：`include/asm-generic.h` 提供 `ADD`、`ADDI`、`STUB`、`LD`、`ST`、`FLD`、`FST`；当前仍只映射 64 位指令。去掉 `LONG_` 前缀仅是命名调整，32 位栈布局、启动、MMU 和 ABI 尚未实现。
 - 寄存器定义：`include/loongarch_regs.h` 保存 C/汇编共用的硬件编码，`include/loongarch.h` 提供 C 访问接口。硬件数值、原有宏名和栈偏移保持兼容；`regdef.h`、`fpregdef.h` 按用户要求保留。
 - 非对齐模拟：`unaligned.c` 按表解码 28 种标量访存指令，`include/inst.h` 仅声明访问描述及模拟接口，`unaligned_gcc.S` 按字节读写。当前 `do_ale()` 仍执行致命异常策略，未接入模拟器；模拟器直接访问 live FPR，不提供访存异常修复，不能直接改接到现有异常返回路径。
 - 异常与页故障：`exception_gcc.S`、`trap.c`；页表操作在 `mmu.c`，页表遍历初始化在 `setup.c`。当前为 LP64D、4 KiB 页、三级页表，禁用 LSX/LASX。
+- 同步异常共用 `loongarch_exception_entry` 保存上下文，由 `loongarch_dispatch_exception()` 按保存的 `ESTAT` 分发；原 `handle_ade` 等向量符号是该入口的别名。中断仍走延迟调度和 Smart 用户返回处理，页故障修复后直接恢复并重试。向量 stub 长度 40 字节，处理函数指针位于偏移 32。
 - SMP：`smp.c` 共用 IOCSR 邮箱和 IPI；邮箱 0 传次核入口物理地址。每核独立异常入口、时钟、栈，设备 IRQ 仍交启动核。2K1000 次核固件需处于约定的邮箱等待状态，5 秒未上线报错。
 - TLB：页表修改同步等待在线核确认失效；关中断等待自旋锁时调用 `loongarch_tlb_poll()`，避免页表锁与 IPI 相互等待。不能在确认远端失效之前回收仍可能被使用的页表。
 - 缓存接口：当前 `cache.c` 中相关函数执行屏障；不能将其当作完整缓存行维护或远端 I-cache 广播。GMAC DMA 使用专用非缓存区，不能直接套用普通缓存堆地址。
@@ -228,10 +231,11 @@ python3 examples/test/loongarch_qemu_test.py --mode smart --cpus 16 --ptw softwa
 
 输出目录含 `<mode>-build.log`、`<mode>-qemu.log`、`<mode>.elf`，非 Nano 还含 `fat.img`、`user.elf`、`user-build.log`。脚本在 `finally` 恢复原 `.config` 并生成 `rtconfig.h`，记录 `restore-config.log`；**不会按恢复后的配置重建 BSP 内的 `rtthread.elf`**。测试后直接运行 `run.sh` 前应重新执行 `scons -j8`，或者使用输出目录中已知配置的 ELF。强制杀进程可能绕过恢复，应检查配置差异。
 
-### LS2K 宿主模型和交叉构建
+### CPU/LS2K 宿主检查和交叉构建
 
 ```sh
 python3 examples/test/ls2k_platform_test.py
+python3 examples/test/loongarch_exception_test.py
 python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k1000 \
     --output /tmp/ls2k1000-check
 python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
@@ -239,6 +243,8 @@ python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
 ```
 
 `ls2k_platform_test.py` 验证两种芯片的 UART、时钟、中断路由/确认/屏蔽和 DMA 通路，临时目录自动删除。GMAC 脚本默认先跑 ASan/UBSan 宿主模型，验证 MDIO 超时、PHY、环回绕、OWN 顺序、坏帧和 lwIP 通知失败重试，两个端口模型各 100,000 帧；`--build` 再跑所选 BSP 的构建矩阵。仅测模型时省略 `--build`。
+
+`loongarch_exception_test.py` 用宿主 C 编译器和 ASan/UBSan 检查实际同步异常 C 分发函数：64 个异常码、3 种其他 `ESTAT` 位组合，共 192 例，验证处理函数选择及 BADV 读取/保存范围。它不替代 QEMU 的真实异常入口测试；Smart 用户态回归另覆盖特权指令、非法指令、断点和边界检查异常的进程隔离。
 
 2K1000 矩阵为 6 种配置，2K0300 为 10 种，包含网络边界配置、SMP/UP，后者还包含 Nano、Smart、UART9 和 Smart 双网口。脚本检查配置生效、编译告警以及 DMA 段布局。它同样会恢复配置，但不重建恢复后的 ELF。模型不模拟电气与总线时序，也不代表真实吞吐。
 
@@ -423,6 +429,29 @@ python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
 两款 LS2K 的 6/10 种配置均交叉构建通过，无编译告警；平台模型及 ASan/UBSan GMAC 模型通过。三个 BSP 的 `.config`、`rtconfig.h` 均已恢复。日志、配置快照、ELF、基线源码及差分结果位于仓库外 `/tmp/la-linux-refactor`，最终汇总为 `summary.json`；这些临时文件可能被清理，不能作为以后会话必然存在的证据。
 
 本轮未重测 1/2/8/16 核，未进行实板验证或完整 Smart libc 应用验证。第 2 节所列十六核组合长压问题继续保留，不能据本次四核通过判定已解决。
+
+### 2026-10-20：汇编别名与异常入口重构
+
+代码提交：`17928ab622`，基于 `d8bb26c11b`。按用户要求将七个 `LONG_*` 指令别名改为 `ADD`、`ADDI`、`STUB`、`LD`、`ST`、`FLD`、`FST`，同步修改使用处，当前仍映射原 64 位指令。没有加入 32 位实现，`regdef.h`、`fpregdef.h` 未修改。
+
+同步故障向量共用一份汇编保存入口，由 `trap.c:loongarch_dispatch_exception()` 读取已保存的异常码分发；原向量符号保留为入口别名。IRQ 延迟调度、Smart 用户返回和页故障直接恢复分别保持原策略，本地中断开关共用 CRMD.IE 更新操作。向量桩仍为 40 字节、指针偏移 32，软件 refill 和帧 ABI 保持不变。注释描述当前行为，未新增来源描述。
+
+本阶段实际检查：
+
+- 宿主 ASan/UBSan：`python3 examples/test/loongarch_exception_test.py` 通过 192 个异常码/状态位组合，检查 C 分发及 BADV 更新范围。
+- Nano UP、Smart 四核的软件 refill 配置中，单独应用宏改名时，公共汇编预处理结果保持一致。完成异常重构后，目标文件对比确认上下文切换、系统调用等未改变指令字节，向量桩和软件 refill 字节一致，入口别名地址与大小正确。异常汇编 `.text` 分别从 5,460/5,404 字节缩减为 1,972/1,916 字节。
+- 新增 `asrtle.d` 用户边界检查异常用例，在重构前后的 Smart 四核软件内核均产生 `Bounds check error`，故障子进程退出，其余回归继续通过。
+- 两款 LS2K 的 6/10 种配置交叉构建及脚本附带的 ASan/UBSan GMAC 模型均通过，无编译告警。三个 BSP 的 `.config`、`rtconfig.h` 已恢复。
+
+使用 GCC 15.2.0、QEMU 10.2.0 重新运行八组完整矩阵，参数与上一阶段相同：UP/四核，Nano/标准版/Smart 软件 refill/Smart 硬件 PTW；内核压力每线程 20,000 次、3 轮；顺序 fork 3×1,024，四核并行 fork 3×4×1,024。调用入口为 `/tmp/la-exception-refactor/run_matrix.py`，仍使用仓库 `loongarch_qemu_test.py` 的 `build()` / `exercise()`，没有删减测试。
+
+首轮结果为 **7 组完整通过、1 组失败**。八组官方测试均通过（Nano/标准版 UP 19、四核 23；Smart UP 32、四核 36），非对齐专项均通过 12,880 例；四核 SMP 校验每核 1,000,000 次、线程回收 1,000 轮，Smart 四核 TLB 各 3×1,000 轮均通过。Smart 四核硬件 PTW 已通过三轮顺序 fork、两轮并行 fork，但第三轮并行中出现 `Kernel page fault: pc=0x90000000002659a0 address=(nil)`，尚未进入三轮内核压力。对应 ELF 定位到 `src/klibc/kstring.c:rt_strcmp()` 第一条读取 `a0` 的指令；其他七组完成全部压力，资源计数均与各自基线一致。
+
+为排查此故障，使用相同新用户测试镜像分别运行重构前的 `1e43f960c9` ELF 和本阶段 ELF：`/tmp/la-exception-refactor/reproduce.py` 对每个内核执行十轮顺序 1,024 次及并行 4×1,024 次 fork/CoW/exec，均通过，资源计数保持各自启动基线。该结果不能排除首轮故障，也尚不能确认故障与本次重构的关系。
+
+另用 `/tmp/la-exception-refactor/replay_matrix.py` 对新旧内核各完整重跑一次 Smart 四核硬件 PTW 的 `exercise()`，包含所有官方测试前置步骤、3 轮用户顺序/并行压力及 3 轮内核压力，两者均通过。每轮资源恢复为各自启动基线（堆 119,296 字节、空闲页 31,582/31,669），未再次触发故障。此后未改动运行逻辑，没有将偶发故障标记为修复。
+
+初次矩阵、对照压力、配置、ELF 及汇编对比保存在仓库外 `/tmp/la-exception-refactor`；首轮汇总为 `summary.json`，失败日志仍在 `smart-4-hardware/smart-qemu.log`，不以复测日志覆盖。对照复测汇总为 `retest-summary.json`，完整复测日志位于 `replay-baseline/`、`replay-current/`。LS2K 沿用上一阶段的两条 `--build --bsp` 命令，将 `--output` 分别改为 `/tmp/la-exception-refactor/ls2k1000`、`/tmp/la-exception-refactor/ls2k0300`。未重测 1/2/8/16 核，未进行实板验收；十六核历史问题及上述四核偶发故障继续保留。
 
 ## 9. 后续 Codex 的工作约定
 
