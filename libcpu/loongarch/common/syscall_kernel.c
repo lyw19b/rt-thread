@@ -16,7 +16,7 @@
 /**
  * @brief    Adapt the kernel toolchain libc file operations to RT-Thread DFS.
  *
- * @note     Only kernel-mode callers use these Linux syscall numbers. Smart user
+ * @note     Only kernel-mode musl callers use this syscall number space. Smart user
  *           calls retain the official RT-Thread numbering. Buffer pointers are trusted
  *           kernel addresses, and DFS operations may sleep.
  *

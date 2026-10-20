@@ -15,24 +15,24 @@
 
 #include "loongarch.h"
 
+/* Keep the compiler barrier paired with the CRMD.IE exchange in both paths. */
+static inline void rt_hw_arch_local_irq_update(rt_uint32_t flags)
+{
+    __asm__ volatile(
+        "csrxchg %0, %1, %2"
+        : "+r"(flags)
+        : "r"(CSR_CRMD_IE), "i"(LOONGARCH_CSR_CRMD)
+        : "memory");
+}
+
 static inline void rt_hw_arch_local_irq_enable(void)
 {
-	rt_uint32_t flags = CSR_CRMD_IE;
-	__asm__ __volatile__(
-		"csrxchg %[val], %[mask], %[reg]\n\t"
-		: [val] "+r" (flags)
-		: [mask] "r" (CSR_CRMD_IE), [reg] "i" (LOONGARCH_CSR_CRMD)
-		: "memory");
+    rt_hw_arch_local_irq_update(CSR_CRMD_IE);
 }
 
 static inline void rt_hw_arch_local_irq_disable(void)
 {
-	rt_uint32_t flags = 0;
-	__asm__ __volatile__(
-		"csrxchg %[val], %[mask], %[reg]\n\t"
-		: [val] "+r" (flags)
-		: [mask] "r" (CSR_CRMD_IE), [reg] "i" (LOONGARCH_CSR_CRMD)
-		: "memory");
+    rt_hw_arch_local_irq_update(0);
 }
 
 

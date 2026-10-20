@@ -134,6 +134,9 @@ def exercise(mode, args, kernel, disk, output):
                 if f"PORT ECHO: {token}" not in result:
                     raise RuntimeError("Serial input ordering regression")
             guest.kernel_test()
+            result = guest.command("port_unaligned_test", 60)
+            if "UNALIGNED TEST: PASS" not in result:
+                raise RuntimeError("Missing unaligned emulation regression result")
             if args.cpus:
                 result = guest.command(f"smp_test {args.smp_iterations}", 180)
                 if f"SMP TEST: PASS cpus={args.cpus}" not in result:

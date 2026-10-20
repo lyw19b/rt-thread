@@ -14,6 +14,23 @@
 #include "asm-offsets.h"
 
 
+.macro init_direct_windows
+    li.d    t0, CSR_DMW0_INIT
+    csrwr   t0, LOONGARCH_CSR_DMWIN0
+    li.d    t0, CSR_DMW1_INIT
+    csrwr   t0, LOONGARCH_CSR_DMWIN1
+.endm
+
+/* Both boot paths enter C at PLV0, with IRQs masked and only scalar FP enabled. */
+.macro init_privileged_state
+    li.w    t0, 0xb0
+    csrwr   t0, LOONGARCH_CSR_CRMD
+    li.w    t0, 0x04
+    csrwr   t0, LOONGARCH_CSR_PRMD
+    li.w    t0, 0x01
+    csrwr   t0, LOONGARCH_CSR_EUEN
+.endm
+
 /**
  * @brief    Enter the kernel on the boot CPU using firmware arguments a0-a2.
  *
@@ -25,11 +42,7 @@
     .section ".start", "ax"
 _start:
 
-	# Set up Direct Map windows registers
-	li.d	t0, CSR_DMW0_INIT	# WUC, PLV0, 0x8000 xxxx xxxx xxxx
-	csrwr	t0, LOONGARCH_CSR_DMWIN0
-	li.d	t0, CSR_DMW1_INIT	# CAC, PLV0, 0x9000 xxxx xxxx xxxx
-	csrwr	t0, LOONGARCH_CSR_DMWIN1
+    init_direct_windows
 
 	/* Continue through the cached DMW1 alias at 0x9000.... */
 	pcaddi  t1, 0
@@ -37,13 +50,7 @@ _start:
 	bstrins.d  t0, t1, (DMW_PABITS - 1), 0
 	jirl	zero, t0, 0x10
 
-	/* Enable PG */
-	li.w	t0, 0xb0		# PLV=0, IE=0, PG=1
-	csrwr	t0, LOONGARCH_CSR_CRMD
-	li.w	t0, 0x04		# PLV=0, PIE=1, PWE=0
-	csrwr	t0, LOONGARCH_CSR_PRMD
-	li.w	t0, 0x01		# FPE=1, SXE=0, ASXE=0, BTE=0
-	csrwr	t0, LOONGARCH_CSR_EUEN
+    init_privileged_state
 
 	/* Clear BSS */
 	bl 		init_bss
@@ -132,20 +139,12 @@ init_clear_regs:
  */
     .global loongarch_secondary_entry
 loongarch_secondary_entry:
-    li.d    t0, CSR_DMW0_INIT
-    csrwr   t0, LOONGARCH_CSR_DMWIN0
-    li.d    t0, CSR_DMW1_INIT
-    csrwr   t0, LOONGARCH_CSR_DMWIN1
+    init_direct_windows
     la.abs  t0, secondary_cached
     jr      t0
 
 secondary_cached:
-    li.w    t0, 0xb0
-    csrwr   t0, LOONGARCH_CSR_CRMD
-    li.w    t0, 0x04
-    csrwr   t0, LOONGARCH_CSR_PRMD
-    li.w    t0, 1
-    csrwr   t0, LOONGARCH_CSR_EUEN
+    init_privileged_state
     move    tp, zero
     csrrd   t0, LOONGARCH_CSR_CPUID
     andi    t0, t0, 0x3ff

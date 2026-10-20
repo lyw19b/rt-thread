@@ -20,34 +20,29 @@
 #define rt_hw_interrupt_disable rt_hw_local_irq_disable
 #endif
 
-.macro  build_prep_badv
-    csrrd     t0, LOONGARCH_CSR_BADV
-    LONG_ST   t0, sp, PT_BVADDR
-.endm
-
-.macro  build_prep_fcsr
-#ifdef RT_USING_FPU
-    movfcsr2gr  a1, $fcsr0
-#endif
-.endm
-
-.macro  build_prep_none
-.endm
-
-.macro  BUILD_HANDLER exception handler prep
-    .align  5
-    START_POINT(handle_\exception)
-_666_\exception:
+/* One entry template for RT-Thread C handlers. The vector stub owns t0/t1;
+ * SAVE_ALL completes the frame before handler arguments are prepared.
+ */
+.macro exception_dispatch name, handler, badv=0, fcsr=0
+    .align 5
+    START_POINT(\name)
     SAVE_ALL
-    build_prep_\prep
+    .if \badv
+        csrrd t0, LOONGARCH_CSR_BADV
+        LONG_ST t0, sp, PT_BVADDR
+    .endif
+#ifdef RT_USING_FPU
+    .if \fcsr
+        movfcsr2gr a1, $fcsr0
+    .endif
+#endif
     move    a0, sp
-    la.abs  t0, do_\handler
+    la.abs  t0, \handler
     jirl    ra, t0, 0
     la.abs  t0, ret_from_exception
-    jirl    ra, t0, 0
-    START_POINT_END(handle_\exception)
+    jirl    zero, t0, 0
+    START_POINT_END(\name)
 .endm
-
 
 /**
  * @brief    Complete deferred scheduling before restoring an exception frame.
@@ -95,16 +90,14 @@ never_return:
 START_POINT_END(ret_from_exception)
 
 
-/* handle interrupt */
-BUILD_HANDLER vint rt_dispatch_trap none
-
-BUILD_HANDLER ade ade badv
-BUILD_HANDLER ale ale badv
-BUILD_HANDLER bce bce none
-BUILD_HANDLER bp bp none
-BUILD_HANDLER fpe fpe fcsr
-BUILD_HANDLER fpu fpu none
-BUILD_HANDLER ri ri none
+exception_dispatch handle_vint, do_rt_dispatch_trap
+exception_dispatch handle_ade, do_ade, 1
+exception_dispatch handle_ale, do_ale, 1
+exception_dispatch handle_bce, do_bce
+exception_dispatch handle_bp, do_bp
+exception_dispatch handle_fpe, do_fpe, 0, 1
+exception_dispatch handle_fpu, do_fpu
+exception_dispatch handle_ri, do_ri
 
     .align 2
     .global trap_entry
@@ -115,48 +108,16 @@ trap_entry:
 
 
 /**
- * @brief    Save the context and resolve a load or instruction-fetch fault.
- *
- * @note     Shared by software refill and hardware PTW. BADV is copied into the
- *           exception frame before calling C; a repaired fault retries the instruction.
+ * @brief Resolve a load, store or write-permission fault through one entry.
+ * @note ESTAT in the saved frame distinguishes the operation. Keep the three
+ *       exported vector targets, and return directly to retry the instruction.
  */
 .global handle_tlb_load_ptw
-handle_tlb_load_ptw:
-    // save t0,t1
-    SAVE_ALL
-    csrrd       a2, LOONGARCH_CSR_BADV
-    move        a0, sp
-    LONG_ST     a2, sp, PT_BVADDR
-    la.abs      t0, do_page_fault
-    jirl        ra, t0, 0
-    RESTORE_ALL_AND_RET
-
-/**
- * @brief    Save the context and resolve a store fault.
- *
- * @note     Shared by software refill and hardware PTW. BADV is copied into the
- *           exception frame before calling C; a repaired fault retries the instruction.
- */
 .global handle_tlb_store_ptw
-handle_tlb_store_ptw:
-    // save t0,t1
-    SAVE_ALL
-    csrrd       a2, LOONGARCH_CSR_BADV
-    move        a0, sp
-    LONG_ST     a2, sp, PT_BVADDR
-    la.abs      t0, do_page_fault
-    jirl        ra, t0, 0
-    RESTORE_ALL_AND_RET
-
-/**
- * @brief    Save the context and resolve a write-permission fault.
- *
- * @note     Shared by software refill and hardware PTW. BADV is copied into the
- *           exception frame before calling C; a repaired fault retries the instruction.
- */
 .global handle_tlb_modify_ptw
+handle_tlb_load_ptw:
+handle_tlb_store_ptw:
 handle_tlb_modify_ptw:
-    // save t0,t1
     SAVE_ALL
     csrrd       a2, LOONGARCH_CSR_BADV
     move        a0, sp

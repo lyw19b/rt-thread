@@ -9,443 +9,172 @@
  */
 
 #include <rtthread.h>
-#include <rthw.h>
-
-#include <loongarch.h>
 #include <inst.h>
 #include <stack.h>
 
-// this codes is forked from liunx project.
+/* The emulator accesses live FPRs and stops on unsupported instructions.
+ * Memory faults are not recoverable here. do_ale() keeps its separate fatal
+ * exception policy; callers invoke this helper explicitly. */
 
-static inline rt_uint64_t read_fpr(rt_uint32_t idx)
+struct memory_opcode
 {
-#define READ_FPR(idx, __value)		\
-    __asm__ __volatile__("movfr2gr.d %0, $f"#idx"\n\t" : "=r"(__value));
+    rt_uint32_t opcode;
+    rt_uint8_t operand_bits;
+    rt_uint8_t size;
+    rt_uint8_t flags;
+};
 
-    unsigned long __value;
+/* Compare only the opcode: BADV already supplies the effective address. */
+static const struct memory_opcode memory_opcodes[] = {
+    { 0xa1, 22, 2, LOONGARCH_MEM_SIGNED }, /* ld.h */
+    { 0xa9, 22, 2, 0 }, /* ld.hu */
+    { 0xa5, 22, 2, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* st.h */
+    { 0xa2, 22, 4, LOONGARCH_MEM_SIGNED }, /* ld.w */
+    { 0xaa, 22, 4, 0 }, /* ld.wu */
+    { 0xa6, 22, 4, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* st.w */
+    { 0xa3, 22, 8, LOONGARCH_MEM_SIGNED }, /* ld.d */
+    { 0xa7, 22, 8, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* st.d */
+    { 0xac, 22, 4, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_FLOAT }, /* fld.s */
+    { 0xad, 22, 4, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE | LOONGARCH_MEM_FLOAT }, /* fst.s */
+    { 0xae, 22, 8, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_FLOAT }, /* fld.d */
+    { 0xaf, 22, 8, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE | LOONGARCH_MEM_FLOAT }, /* fst.d */
+    { 0x24, 24, 4, LOONGARCH_MEM_SIGNED }, /* ldptr.w */
+    { 0x25, 24, 4, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* stptr.w */
+    { 0x26, 24, 8, LOONGARCH_MEM_SIGNED }, /* ldptr.d */
+    { 0x27, 24, 8, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* stptr.d */
+    { 0x7008, 15, 2, LOONGARCH_MEM_SIGNED }, /* ldx.h */
+    { 0x7048, 15, 2, 0 }, /* ldx.hu */
+    { 0x7028, 15, 2, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* stx.h */
+    { 0x7010, 15, 4, LOONGARCH_MEM_SIGNED }, /* ldx.w */
+    { 0x7050, 15, 4, 0 }, /* ldx.wu */
+    { 0x7030, 15, 4, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* stx.w */
+    { 0x7018, 15, 8, LOONGARCH_MEM_SIGNED }, /* ldx.d */
+    { 0x7038, 15, 8, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE }, /* stx.d */
+    { 0x7060, 15, 4, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_FLOAT }, /* fldx.s */
+    { 0x7070, 15, 4, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE | LOONGARCH_MEM_FLOAT }, /* fstx.s */
+    { 0x7068, 15, 8, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_FLOAT }, /* fldx.d */
+    { 0x7078, 15, 8, LOONGARCH_MEM_SIGNED | LOONGARCH_MEM_STORE | LOONGARCH_MEM_FLOAT }, /* fstx.d */
+};
 
-    switch (idx) {
-    case 0:
-        READ_FPR(0, __value);
-        break;
-    case 1:
-        READ_FPR(1, __value);
-        break;
-    case 2:
-        READ_FPR(2, __value);
-        break;
-    case 3:
-        READ_FPR(3, __value);
-        break;
-    case 4:
-        READ_FPR(4, __value);
-        break;
-    case 5:
-        READ_FPR(5, __value);
-        break;
-    case 6:
-        READ_FPR(6, __value);
-        break;
-    case 7:
-        READ_FPR(7, __value);
-        break;
-    case 8:
-        READ_FPR(8, __value);
-        break;
-    case 9:
-        READ_FPR(9, __value);
-        break;
-    case 10:
-        READ_FPR(10, __value);
-        break;
-    case 11:
-        READ_FPR(11, __value);
-        break;
-    case 12:
-        READ_FPR(12, __value);
-        break;
-    case 13:
-        READ_FPR(13, __value);
-        break;
-    case 14:
-        READ_FPR(14, __value);
-        break;
-    case 15:
-        READ_FPR(15, __value);
-        break;
-    case 16:
-        READ_FPR(16, __value);
-        break;
-    case 17:
-        READ_FPR(17, __value);
-        break;
-    case 18:
-        READ_FPR(18, __value);
-        break;
-    case 19:
-        READ_FPR(19, __value);
-        break;
-    case 20:
-        READ_FPR(20, __value);
-        break;
-    case 21:
-        READ_FPR(21, __value);
-        break;
-    case 22:
-        READ_FPR(22, __value);
-        break;
-    case 23:
-        READ_FPR(23, __value);
-        break;
-    case 24:
-        READ_FPR(24, __value);
-        break;
-    case 25:
-        READ_FPR(25, __value);
-        break;
-    case 26:
-        READ_FPR(26, __value);
-        break;
-    case 27:
-        READ_FPR(27, __value);
-        break;
-    case 28:
-        READ_FPR(28, __value);
-        break;
-    case 29:
-        READ_FPR(29, __value);
-        break;
-    case 30:
-        READ_FPR(30, __value);
-        break;
-    case 31:
-        READ_FPR(31, __value);
-        break;
-    default:
-        rt_kprintf("unexpected idx '%d'", idx);
+/**
+ * @brief Decode a supported scalar memory instruction without C bitfields.
+ * @param word Instruction word at the faulting PC.
+ * @param access Receives the register, byte count and access flags on success.
+ * @return RT_TRUE for a supported instruction; otherwise access is unchanged.
+ */
+rt_bool_t loongarch_decode_mem_access(rt_uint32_t word, struct loongarch_mem_access *access)
+{
+    rt_size_t i;
+
+    for (i = 0; i < sizeof(memory_opcodes) / sizeof(memory_opcodes[0]); i++)
+    {
+        const struct memory_opcode *entry = &memory_opcodes[i];
+
+        if ((word >> entry->operand_bits) == entry->opcode)
+        {
+            access->reg = word & 0x1f;
+            access->size = entry->size;
+            access->flags = entry->flags;
+            return RT_TRUE;
+        }
     }
-#undef READ_FPR
-    return __value;
+    return RT_FALSE;
 }
 
-static inline void write_fpr(rt_uint32_t idx, rt_uint64_t value)
+/* FPR operands must be assembler constants. Share the register list between
+ * the two access directions; these helpers deliberately access live FPRs. */
+/* clang-format off */
+#define FOR_EACH_FPR(operation) \
+    operation(0) operation(1) operation(2) operation(3) \
+    operation(4) operation(5) operation(6) operation(7) \
+    operation(8) operation(9) operation(10) operation(11) \
+    operation(12) operation(13) operation(14) operation(15) \
+    operation(16) operation(17) operation(18) operation(19) \
+    operation(20) operation(21) operation(22) operation(23) \
+    operation(24) operation(25) operation(26) operation(27) \
+    operation(28) operation(29) operation(30) operation(31)
+/* clang-format on */
+
+static rt_uint64_t read_fpr(rt_uint8_t reg)
 {
-#define WRITE_FPR(idx, value)		\
-    __asm__ __volatile__("movgr2fr.d $f"#idx", %0\n\t" :: "r"(value));
-
-    switch (idx) {
-    case 0:
-        WRITE_FPR(0, value);
-        break;
-    case 1:
-        WRITE_FPR(1, value);
-        break;
-    case 2:
-        WRITE_FPR(2, value);
-        break;
-    case 3:
-        WRITE_FPR(3, value);
-        break;
-    case 4:
-        WRITE_FPR(4, value);
-        break;
-    case 5:
-        WRITE_FPR(5, value);
-        break;
-    case 6:
-        WRITE_FPR(6, value);
-        break;
-    case 7:
-        WRITE_FPR(7, value);
-        break;
-    case 8:
-        WRITE_FPR(8, value);
-        break;
-    case 9:
-        WRITE_FPR(9, value);
-        break;
-    case 10:
-        WRITE_FPR(10, value);
-        break;
-    case 11:
-        WRITE_FPR(11, value);
-        break;
-    case 12:
-        WRITE_FPR(12, value);
-        break;
-    case 13:
-        WRITE_FPR(13, value);
-        break;
-    case 14:
-        WRITE_FPR(14, value);
-        break;
-    case 15:
-        WRITE_FPR(15, value);
-        break;
-    case 16:
-        WRITE_FPR(16, value);
-        break;
-    case 17:
-        WRITE_FPR(17, value);
-        break;
-    case 18:
-        WRITE_FPR(18, value);
-        break;
-    case 19:
-        WRITE_FPR(19, value);
-        break;
-    case 20:
-        WRITE_FPR(20, value);
-        break;
-    case 21:
-        WRITE_FPR(21, value);
-        break;
-    case 22:
-        WRITE_FPR(22, value);
-        break;
-    case 23:
-        WRITE_FPR(23, value);
-        break;
-    case 24:
-        WRITE_FPR(24, value);
-        break;
-    case 25:
-        WRITE_FPR(25, value);
-        break;
-    case 26:
-        WRITE_FPR(26, value);
-        break;
-    case 27:
-        WRITE_FPR(27, value);
-        break;
-    case 28:
-        WRITE_FPR(28, value);
-        break;
-    case 29:
-        WRITE_FPR(29, value);
-        break;
-    case 30:
-        WRITE_FPR(30, value);
-        break;
-    case 31:
-        WRITE_FPR(31, value);
-        break;
-    default:
-        rt_kprintf("unexpected idx '%d'", idx);
-    }
-#undef WRITE_FPR
-}
-
-// FIXME
-// this function is copied from linux kernel and modified
-// however it could cause interruption error under extreme conditions
-// link 'iperf'
-unsigned long unaligned_read(void *addr, void *value, unsigned long n, int sign);
-unsigned long unaligned_write(void *addr, unsigned long value, unsigned long n);
-
-void emulate_load_store_insn(struct pt_regs *regs, void *addr, rt_uint32_t *pc)
-{
-    rt_bool_t fp = 0;
-    rt_bool_t sign, write;
-    rt_uint32_t res, size = 0;
     rt_uint64_t value = 0;
 
-    union loongarch_instruction insn;
-    insn.word = *pc;
-
-    uint64_t *regfile = (uint64_t *)regs;
-
-    switch (insn.reg2i12_format.opcode) {
-    case ldh_op:
-        size = 2;
-        sign = 1;
-        write = 0;
+#define READ_FPR_CASE(n)                                        \
+    case n:                                                     \
+        __asm__ volatile("movfr2gr.d %0, $f" #n : "=r"(value)); \
         break;
-    case ldhu_op:
-        size = 2;
-        sign = 0;
-        write = 0;
-        break;
-    case sth_op:
-        size = 2;
-        sign = 1;
-        write = 1;
-        break;
-    case ldw_op:
-        size = 4;
-        sign = 1;
-        write = 0;
-        break;
-    case ldwu_op:
-        size = 4;
-        sign = 0;
-        write = 0;
-        break;
-    case stw_op:
-        size = 4;
-        sign = 1;
-        write = 1;
-        break;
-    case ldd_op:
-        size = 8;
-        sign = 1;
-        write = 0;
-        break;
-    case std_op:
-        size = 8;
-        sign = 1;
-        write = 1;
-        break;
-    case flds_op:
-        size = 4;
-        fp = 1;
-        sign = 1;
-        write = 0;
-        break;
-    case fsts_op:
-        size = 4;
-        fp = 1;
-        sign = 1;
-        write = 1;
-        break;
-    case fldd_op:
-        size = 8;
-        fp = 1;
-        sign = 1;
-        write = 0;
-        break;
-    case fstd_op:
-        size = 8;
-        fp = 1;
-        sign = 1;
-        write = 1;
-        break;
+    switch (reg)
+    {
+        FOR_EACH_FPR(READ_FPR_CASE)
     }
+#undef READ_FPR_CASE
+    return value;
+}
 
-    switch (insn.reg2i14_format.opcode) {
-    case ldptrw_op:
-        size = 4;
-        sign = 1;
-        write = 0;
+static void write_fpr(rt_uint8_t reg, rt_uint64_t value)
+{
+#define WRITE_FPR_CASE(n)                                         \
+    case n:                                                       \
+        __asm__ volatile("movgr2fr.d $f" #n ", %0" ::"r"(value)); \
         break;
-    case stptrw_op:
-        size = 4;
-        sign = 1;
-        write = 1;
-        break;
-    case ldptrd_op:
-        size = 8;
-        sign = 1;
-        write = 0;
-        break;
-    case stptrd_op:
-        size = 8;
-        sign = 1;
-        write = 1;
-        break;
+    switch (reg)
+    {
+        FOR_EACH_FPR(WRITE_FPR_CASE)
     }
+#undef WRITE_FPR_CASE
+}
+#undef FOR_EACH_FPR
 
-    switch (insn.reg3_format.opcode) {
-    case ldxh_op:
-        size = 2;
-        sign = 1;
-        write = 0;
-        break;
-    case ldxhu_op:
-        size = 2;
-        sign = 0;
-        write = 0;
-        break;
-    case stxh_op:
-        size = 2;
-        sign = 1;
-        write = 1;
-        break;
-    case ldxw_op:
-        size = 4;
-        sign = 1;
-        write = 0;
-        break;
-    case ldxwu_op:
-        size = 4;
-        sign = 0;
-        write = 0;
-        break;
-    case stxw_op:
-        size = 4;
-        sign = 1;
-        write = 1;
-        break;
-    case ldxd_op:
-        size = 8;
-        sign = 1;
-        write = 0;
-        break;
-    case stxd_op:
-        size = 8;
-        sign = 1;
-        write = 1;
-        break;
-    case fldxs_op:
-        size = 4;
-        fp = 1;
-        sign = 1;
-        write = 0;
-        break;
-    case fstxs_op:
-        size = 4;
-        fp = 1;
-        sign = 1;
-        write = 1;
-        break;
-    case fldxd_op:
-        size = 8;
-        fp = 1;
-        sign = 1;
-        write = 0;
-        break;
-    case fstxd_op:
-        size = 8;
-        fp = 1;
-        sign = 1;
-        write = 1;
-        break;
-    }
+/**
+ * @brief Emulate one scalar load or store at a caller-supplied address.
+ * @param regs Saved integer context; ERA advances only after a successful access.
+ * @param addr Effective address, already computed by the CPU or caller.
+ * @param pc Address of the instruction word to decode.
+ * @note The caller must supply readable instruction/data memory and keep the
+ *       live FPR bank stable. Unsupported instructions stop here as before.
+ */
+void emulate_load_store_insn(struct pt_regs *regs, void *addr, rt_uint32_t *pc)
+{
+    struct loongarch_mem_access access;
+    rt_ubase_t *gpr = (rt_ubase_t *)regs;
+    rt_uint64_t value;
+    unsigned long result;
 
-    if (!size)
+    if (!loongarch_decode_mem_access(*pc, &access))
+    {
         goto fault;
-
-    if (!write) {
-        res = unaligned_read(addr, &value, size, sign);
-        if (res)
-            goto fault;
-
-        /* Rd is the same field in any formats */
-        if (!fp)
-            regfile[insn.reg3_format.rd] = value;
-        else {
-            write_fpr(insn.reg3_format.rd, value);
-        }
-    } else {
-        /* Rd is the same field in any formats */
-        if (!fp)
-            value = regfile[insn.reg3_format.rd];
-        else {
-            value = read_fpr(insn.reg3_format.rd);
-        }
-
-        res = unaligned_write(addr, value, size);
-        if (res)
-            goto fault;
     }
 
-    regs->r_era += 4;
+    if (access.flags & LOONGARCH_MEM_STORE)
+    {
+        value = (access.flags & LOONGARCH_MEM_FLOAT) ? read_fpr(access.reg) : gpr[access.reg];
+        result = unaligned_write(addr, value, access.size);
+    }
+    else
+    {
+        result = unaligned_read(addr, &value, access.size, access.flags & LOONGARCH_MEM_SIGNED);
+        if (result == 0)
+        {
+            if (access.flags & LOONGARCH_MEM_FLOAT)
+            {
+                write_fpr(access.reg, value);
+            }
+            else
+            {
+                gpr[access.reg] = value;
+            }
+        }
+    }
 
-    return;
+    if (result == 0)
+    {
+        regs->r_era += sizeof(*pc);
+        return;
+    }
 
 fault:
-    rt_kprintf("Unhandled unaligned access", regs);
-    while(1);
-
-    return;
+    rt_kprintf("Unhandled unaligned access");
+    while (1)
+    {
+    }
 }

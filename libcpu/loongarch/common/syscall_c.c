@@ -19,7 +19,7 @@ typedef rt_ubase_t (*loongarch_syscall_t)(rt_ubase_t, rt_ubase_t, rt_ubase_t,
  * @brief    Dispatch a Smart system call from the saved exception frame.
  *
  * @note     User calls use the official RT-Thread table. Kernel-mode libc calls
- *           use the separate Linux-numbered adapter. Local IRQs are enabled while
+ *           use the separate kernel musl adapter. Local IRQs are enabled while
  *           executing a call and masked again before register restoration. Fork sees
  *           the original ERA; ordinary calls then advance ERA past the syscall.
  *

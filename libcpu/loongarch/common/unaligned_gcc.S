@@ -9,70 +9,55 @@
  */
 
 
-#include "rtconfig.h"
-#include "asm-offsets.h"
 #include "asm-generic.h"
-#include "stackframe.h"
+#include "regdef.h"
 
-/*
- * unsigned long unaligned_read(void *addr, void *value, unsigned long n, bool sign)
- *
- * a0: addr
- * a1: value
- * a2: n1
- * a3: sign
+/* These byte loops have no exception-table fixups. Callers provide accessible
+ * memory and a width of 1..8; zero width returns -1 without accessing memory.
+ */
+
+/* a0 = source, a1 = result, a2 = width, a3 = sign extension.
+ * Read high to low, preserving the original memory access order. The first
+ * byte seeds the sign; each remaining byte extends the accumulated value.
  */
 START_POINT(unaligned_read)
-    beqz    a2, 5f
-
-    li.w    t2, 0
-    addi.d  t0, a2, -1
-    slli.d  t1, t0, 3
-    add.d   a0, a0, t0
-
-    beqz    a3, 2f
-1:  ld.b    t3, a0, 0
-    b       3f
-
-2:  ld.bu   t3, a0, 0
-3:  sll.d   t3, t3, t1
-    or      t2, t2, t3
-    addi.d  t1, t1, -8
-    addi.d  a0, a0, -1
+    beqz    a2, .Lread_empty
+    add.d   t0, a0, a2
+    addi.d  t0, t0, -1
+    beqz    a3, .Lread_unsigned
+    ld.b    t1, t0, 0
+    b       .Lread_next
+.Lread_unsigned:
+    ld.bu   t1, t0, 0
+.Lread_next:
     addi.d  a2, a2, -1
-    bgtz    a2, 2b
-4:  st.d    t2, a1, 0
-
-    move    a0, a2
+    beqz    a2, .Lread_done
+    addi.d  t0, t0, -1
+    ld.bu   t2, t0, 0
+    slli.d  t1, t1, 8
+    or      t1, t1, t2
+    b       .Lread_next
+.Lread_done:
+    st.d    t1, a1, 0
+    move    a0, zero
     jr      ra
-
-5:  li.w    a0, -1
+.Lread_empty:
+    li.w    a0, -1
     jr      ra
-
 START_POINT_END(unaligned_read)
 
-/*
- * unsigned long unaligned_write(void *addr, unsigned long value, unsigned long n)
- *
- * a0: addr
- * a1: value
- * a2: n
- */
+/* a0 = destination, a1 = value, a2 = width. Publish low bytes first. */
 START_POINT(unaligned_write)
-    beqz    a2, 3f
-
-    li.w    t0, 0
-1:  srl.d   t1, a1, t0
-2:  st.b    t1, a0, 0
-    addi.d  t0, t0, 8
-    addi.d  a2, a2, -1
+    beqz    a2, .Lwrite_empty
+.Lwrite_byte:
+    st.b    a1, a0, 0
+    srli.d  a1, a1, 8
     addi.d  a0, a0, 1
-    bgtz    a2, 1b
-
-    move    a0, a2
+    addi.d  a2, a2, -1
+    bnez    a2, .Lwrite_byte
+    move    a0, zero
     jr      ra
-
-3:  li.w    a0, -1
+.Lwrite_empty:
+    li.w    a0, -1
     jr      ra
-
 START_POINT_END(unaligned_write)
