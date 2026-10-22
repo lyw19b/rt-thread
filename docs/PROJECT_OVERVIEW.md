@@ -1,12 +1,13 @@
 # RT-Thread LoongArch 项目交接
 
-更新时间：2026-10-20。本文面向下一次在本仓库工作的 Codex 和维护者，记录项目状态、代码入口、构建测试方法及尚未完成的验证。后续修改代码时，应同步更新相关状态，不能把历史测试结果当作新提交的验证结果。
+更新时间：2026-10-22。本次仅更新交接文档，核对提交、工具路径和已有测试记录，未重新运行构建或回归；最近一次实现验证仍为 2026-10-20。本文面向下一次在本仓库工作的 Codex 和维护者，记录项目状态、代码入口、构建测试方法及尚未完成的验证。后续修改代码时，应同步更新相关状态，不能把历史测试结果当作新提交的验证结果。
 
 ## 1. 下次启动先看这里
 
 - 当前仓库：`/home/airxs/user/aicode/kernel/rt-thread`。
-- 当前分支：`rt-loong64-v0.1`。CPU 异常入口重构提交为 `17928ab622`；此后的故障定位、MMU/syscall 修复及验证范围见第 8 节。启动新任务时仍应重新检查提交和工作区状态。
+- 当前分支：`rt-loong64-v0.1`。最近实现提交为 `8c3bce55b0`（页故障修复上下文检查）；此前 `dbcb780b13` 修复 MMU 回滚及 IRQ 状态，`17928ab622` 重构异常入口和汇编别名。更新本文前工作区干净；启动新任务时仍应重新检查提交和工作区状态。
 - 参考仓库：`/home/airxs/user/aicode/kernel/rt-thread-2k1000`。仅用于核对硬件行为和移植差异，不直接照搬其驱动结构或代码风格。
+- 本地架构参考：`/home/airxs/user/aicode/system/linux/linux-6.11-labcore`。可只读核对 LoongArch 指令、ABI 和硬件语义；本项目实现及注释应围绕自身行为组织，不搬用 Linux 实现或注释，保留必要的版权与许可声明。
 - 当前内核版本宏为 RT-Thread 5.3.1；不能据此推断本分支与上游最新版本完全一致。
 - 先读 [AGENTS.md](../AGENTS.md)、本文及具体 BSP 的 README，再读取任务涉及的源码。
 - 本文按用户明确要求放在 `docs/PROJECT_OVERVIEW.md`。其他文档仍遵守仓库放置规则，不随意新建 Markdown。
@@ -21,11 +22,26 @@ git diff --stat
 
 已有持续要求：代码清晰、可维护，公共代码只保留一份；遵循 RT-Thread 风格并有必要的注释；阶段性提交；Nano 和 Smart 都要回归及压力测试，Smart 要覆盖用户态、MMU 和多核。实板由用户后续提供，不能宣称已经完成实板验收。
 
+**当前修改边界：用户已再次明确“仍只允许修改 LoongArch，保留公共代码不变”。** 继续修复时只在授权的 LoongArch 实现及直接相关测试、文档内工作；`components/`、`src/`、公共 `include/` 保持不变，不能因 `components/lwp/arch/loongarch/` 含架构名就自行扩大范围。只由一个 Agent 工作，不启动子代理。`regdef.h`、`fpregdef.h` 保留；汇编别名保持 `ADD`、`ADDI`、`STUB`、`LD`、`ST`、`FLD`、`FST`，不恢复 `LONG_` 前缀，也不据此宣称已支持 32 位。
+
+**当前结论：架构层的次生缺页断言已修复，多核进程压力的根因尚未全部修复。** 最新八组 UP/四核回归通过，四核软件 refill、硬件 PTW 各追加三轮 `stress 4096`、六轮 `parallel 4 1024` 通过且资源恢复基线；但此前软件路径曾到第八轮才失败，公共 LWP/procfs 缺陷仍保留，不能标记为多核长期稳定。
+
+下次定位优先读取以下证据，详细过程及归因边界见第 8 节。路径位于仓库外，2026-10-22 核对了最新验证汇总及源码校验值；临时目录以后可能被清理。
+
+| 事项 | 当前状态与记录入口 |
+| --- | --- |
+| 最新架构修复及回归 | `8c3bce55b0`；`/tmp/la-fault-context-fix/summary.json` 为八组回归，`injection-v2-summary.json` 为四组新旧受控故障对照，`pressure/summary.json` 为追加压力 |
+| LWP 重复释放 PID 引用 | 已捕获重复递减最后引用及活动线程使用已释放 LWP 的现场，未修复；`/tmp/la-null-fault/no-procfs-diagnostic/pid0-break-gdb.log`、`assert-details-gdb.log` |
+| procfs 遍历与摘除竞争 | 已捕获摘除节点后遍历继续读取该节点的实际访存链，未修复；`/tmp/la-cause-analysis/hardware-chain.log`、`hardware-trace-gdb.log` |
+| 自然压力失败 | 软件 refill 和硬件 PTW 均有失败，不能互相排除；`/tmp/la-pressure-20261020/summary.json` 及各模式故障快照 |
+
+继续分析时区分首次异常与后续断言、其他 CPU 等待 TLB 确认的现场。不能在架构切换或异常处理中跳过损坏对象，也不能以关闭 SMP/procfs、缩减压力或删除断言替代根因修复；临时隔离实验的结果须单独记录。
+
 ## 2. 当前支持范围与未完成事项
 
 | 目标 | 配置与默认核数 | Smart / 页表遍历 | 验证边界 |
 | --- | --- | --- | --- |
-| QEMU LoongArch `virt` | Nano、标准版、Smart；默认 SMP 4 核，可关闭 SMP，配置范围 1～16 核 | 软件 refill、硬件 PTW | 已有回归及压力记录；16 核停滞及四核硬件 PTW 偶发页故障待定位 |
+| QEMU LoongArch `virt` | Nano、标准版、Smart；默认 SMP 4 核，可关闭 SMP，配置范围 1～16 核 | 软件 refill、硬件 PTW | 最新八组 UP/四核回归通过；两种四核 Smart 路径的历史进程压力故障及 16 核停滞仍未完成稳定性验收 |
 | LS2K1000LA | 标准版、网络版；默认 SMP 2 核，可改 1 核或关闭 SMP | **板级 Smart 内存初始化未移植**；芯片只允许软件 refill | 交叉编译、宿主驱动模型通过；未实板启动或联网验收 |
 | LS2K0300 | Nano、标准版、网络版、Smart；默认开启 SMP 框架，限定 1 核 | 软件 refill；Smart 使用临时根文件系统 | 交叉编译、宿主驱动模型通过；未实板验收 |
 
@@ -108,7 +124,7 @@ git diff --stat
 
 ## 4. 本机工具与环境
 
-2026-10-20 已在本机核实：
+工具环境记录于 2026-10-20；2026-10-22 重新核实 GCC、GDB、QEMU 版本及 FAT 工具路径：
 
 | 工具 | 路径或状态 |
 | --- | --- |
@@ -118,7 +134,7 @@ git diff --stat
 | 另一套 QEMU | `~/local/qemu-loongarch64-10.1.2/bin/qemu-system-loongarch64`；不要用它验证硬件 PTW |
 | SCons / Python / 宿主 C 编译器 | `/usr/bin/scons`、`/usr/bin/python3`、`/usr/bin/cc` |
 | Python 模块 | `kconfiglib`、`pexpect` 可导入 |
-| FAT 工具 | `/usr/sbin/mkfs.fat` 存在；**`mcopy` 当前不在 PATH 中，`~/local` 和 `/tmp` 下也未找到** |
+| FAT 工具 | `/usr/sbin/mkfs.fat` 存在；`mcopy` 不在 PATH 中，但 `/tmp/la-linux-refactor/tools/usr/bin/mcopy` 存在，可用 `MCOPY` 显式指定 |
 
 建议在执行本页命令的 shell 中设置：
 
@@ -126,15 +142,17 @@ git diff --stat
 export RTT_EXEC_PATH="$HOME/local/loongarch64-linux-musl-gcc-15.2.0/bin"
 export RTT_CC_PREFIX=loongarch64-linux-musl-
 export QEMU="$HOME/local/qemu-la64/bin/qemu-system-loongarch64"
+export MCOPY=/tmp/la-linux-refactor/tools/usr/bin/mcopy
 export PATH="$RTT_EXEC_PATH:/usr/sbin:$PATH"
 ```
 
 工具链可以用 `rg --files "$HOME/local" -g '*musl-gcc' -g '*gdb' -g 'qemu-system-loongarch64'` 定位。自动测试优先用 `RTT_EXEC_PATH`；未设置时扫描 `~/local/*/bin/loongarch64-linux-musl-gcc`，因此多套工具链并存时建议显式设置。
 
-标准版/Smart 自动回归还需要 mtools 的 `mcopy`。在 Debian/Ubuntu 环境可按本机管理方式安装 `mtools`；若已有自定义安装，可设置 `MCOPY=/实际路径/mcopy` 或传 `--mcopy`。不要把工具二进制加入仓库。交接文档初稿未重新运行回归；本次 CPU 重构验证将 mtools 4.0.43 临时解包到 `/tmp/la-linux-refactor/tools`，使用其中的 `usr/bin/mcopy`，未安装到系统 PATH。后续会话应重新确认该临时路径是否存在。
+标准版/Smart 自动回归还需要 mtools 的 `mcopy`。此前 CPU 重构验证将 mtools 4.0.43 临时解包到 `/tmp/la-linux-refactor/tools`，未安装到系统 PATH。后续会话应重新确认该临时路径可执行；若已清理，可按本机管理方式安装 `mtools`，或将 `MCOPY` / `--mcopy` 改为实际安装路径。不要把工具二进制加入仓库。
 
 ```sh
-command -v scons python3 cc mkfs.fat mcopy
+command -v scons python3 cc mkfs.fat
+test -x "$MCOPY"
 python3 -c 'import kconfiglib, pexpect'
 "$RTT_EXEC_PATH/loongarch64-linux-musl-gcc" --version
 "$RTT_EXEC_PATH/loongarch64-linux-musl-gdb" --version
@@ -202,8 +220,8 @@ cd /home/airxs/user/aicode/kernel/rt-thread
 python3 examples/test/loongarch_qemu_test.py --mode all --cpus 0 \
     --output /tmp/la-up
 
-# 四核完整回归及压力；先补齐 mcopy。
-python3 examples/test/loongarch_qemu_test.py --mode all --parallel --cpus 4 \
+# 四核完整回归及压力；先配置 MCOPY，默认顺序运行各版本客体。
+python3 examples/test/loongarch_qemu_test.py --mode all --cpus 4 \
     --smp-iterations 1000000 --iterations 20000 --fork-loops 1024 --repeats 3 \
     --output /tmp/la-smp4
 
@@ -218,6 +236,8 @@ python3 examples/test/loongarch_qemu_test.py --mode smart --cpus 16 --ptw softwa
 ```
 
 `--cpus 0` 关闭 SMP，`--cpus 1` 是单核 SMP，二者应分别验证；其余可选 2、4、8、16。用 `--mode nano` 可在缺少 mcopy 时运行 Nano 测试。`--parallel` 仅在构建完成后并行运行不同版本客体，不允许多个脚本同时修改同一 BSP 配置。
+
+本机后续完整矩阵默认顺序运行客体；若使用自定义批量驱动，最多同时运行两个。此前多客体并发曾出现官方 tick 精确相等断言失败，限制到两个客体后复测通过，但尚未证明宿主负载是唯一原因；保留失败记录，不修改测试断言。这里的客体并发限制不减少单个 Smart 客体内的 `parallel 4 1024` 进程压力。
 
 脚本先替换 `.config`，启用自测及官方 utest，构建 ELF，必要时构建用户测试程序和 FAT 镜像，然后检查：
 
@@ -237,6 +257,7 @@ python3 examples/test/loongarch_qemu_test.py --mode smart --cpus 16 --ptw softwa
 python3 examples/test/ls2k_platform_test.py
 python3 examples/test/loongarch_exception_test.py
 python3 examples/test/loongarch_port_state_test.py
+python3 examples/test/loongarch_page_fault_test.py
 python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k1000 \
     --output /tmp/ls2k1000-check
 python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
@@ -248,6 +269,8 @@ python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 \
 `loongarch_exception_test.py` 用宿主 C 编译器和 ASan/UBSan 检查实际同步异常 C 分发函数：64 个异常码、3 种其他 `ESTAT` 位组合，共 192 例，验证处理函数选择及 BADV 读取/保存范围。它不替代 QEMU 的真实异常入口测试；Smart 用户态回归另覆盖特权指令、非法指令、断点和边界检查异常的进程隔离。
 
 `loongarch_port_state_test.py` 提取实际 MMU 和 syscall C 实现，用 ASan/UBSan 检查 19 个页表分配失败、跨 2 MiB/1 GiB 边界替换及回收用例，并检查地址空间切换的 IRQ 保护、硬件页表查询和 Smart/非 Smart DFS 的 syscall IRQ 状态。模型替换页分配器、CSR 和地址别名，不验证真实指令或内存屏障时序，需配合 QEMU 回归。
+
+`loongarch_page_fault_test.py` 提取实际 `do_page_fault()`，在 ASan/UBSan 下检查 Smart/非 Smart、UP/SMP 共 54 个用例，覆盖可修复缺页、不可调度上下文、空地址空间、IRQ 状态、用户退出及原始异常帧。调度、CSR 和缺页修复器使用宿主替身；真实入口行为另由 QEMU 回归和第 8 节的受控故障对照验证。
 
 2K1000 矩阵为 6 种配置，2K0300 为 10 种，包含网络边界配置、SMP/UP，后者还包含 Nano、Smart、UART9 和 Smart 双网口。脚本检查配置生效、编译告警以及 DMA 段布局。它同样会恢复配置，但不重建恢复后的 ELF。模型不模拟电气与总线时序，也不代表真实吞吐。
 
@@ -570,7 +593,7 @@ python3 /tmp/la-pressure-20261020/report.py
 
 ### 2026-10-20：限定架构范围的页故障处理修复
 
-用户再次明确“仍只允许修改 LoongArch，保留公共代码不变”。本阶段基于 `6f84156306`，运行代码仅修改 `libcpu/loongarch/common/trap.c`，增加 `examples/test/loongarch_page_fault_test.py` 并更新本文；`components/`、`src/`、公共头文件和 BSP 配置保持不变。
+用户再次明确“仍只允许修改 LoongArch，保留公共代码不变”。本阶段基于 `6f84156306`，完成后提交为 `8c3bce55b0`。运行代码仅修改 `libcpu/loongarch/common/trap.c`，增加 `examples/test/loongarch_page_fault_test.py` 并更新本文；`components/`、`src/`、公共头文件和 BSP 配置保持不变。
 
 针对上轮 `lwp_aspace_switch+28` 访问 `0x10` 后进入缺页修复器、再触发调度断言的现场，内核页故障在以下情况下直接进入现有致命报告：地址低于有效用户映射起点、处于 ISR/调度临界区/无当前线程、选中的地址空间为空。UP 下保存的 IRQ 状态为关闭时也不进入需要调度的修复器；SMP 下仅关闭本地 IRQ、但调度仍可用的线程上下文保留原行为。致命报告前关闭本地 IRQ，不再额外获取全局 CPU 锁。正常缺页、CoW、用户故障退出和返回时的 IRQ 状态保持原策略。
 
@@ -594,14 +617,16 @@ python3 examples/test/loongarch_port_state_test.py
 
 本阶段记录位于仓库外 `/tmp/la-fault-context-fix`：`summary.json` 为八组回归，`manifest.json` 为源码/镜像/配置校验值，`current-model-final.log` 和 `baseline-model-final.log` 为最终定向测试的新旧源码对照，`injection-v2-summary.json`、`inject-v2-*/` 为最终故障对照及保存帧；首版脚本记录保留在 `injection-summary.json`、`inject-*/`。`pressure/summary.json` 及各模式目录保存追加压力的全部阶段、资源采样和串口输出。全部 QEMU/GDB 已结束，BSP 配置已恢复。未进行 LS2K 实板、1/2/8/16 核或完整 Smart libc 应用验收。
 
+2026-10-22 交接核对：上述三个最终汇总仍分别记录八组回归、四组受控对照、两组追加压力通过；`manifest.json` 中 `trap.c` 和定向测试的 SHA-256 与当前源码一致。清单的 `base_commit` 为修改前的 `6f84156306`，须同时读取 `changes` 和文件校验值，不能将最新镜像误认作修改前基线。复跑入口保存在同目录的 `run_matrix.py`、`check_switch_fault.py`、`pressure/run_pressure.py`；使用前检查其中固定的输出目录、ELF 和配置路径，为新实验指定独立目录，不覆盖既有失败或通过记录。本次只核对记录，没有重跑这些脚本。
+
 ## 9. 后续 Codex 的工作约定
 
 - 用户最新任务决定本轮改动范围；本文是交接资料，不是要求每次自动展开所有待办。
 - 先用 `rg` / `rg --files` 定位相关代码，用 `git diff` 了解已有修改，不覆盖他人工作。独立读取可以并行；同一 BSP 的配置、构建和测试必须串行。
 - 在具备 `functions.exec` / `exec_command` 的会话中通过这些工具运行命令；长测试写日志到仓库外并取得会话 ID，后续轮询检查退出码和末尾标记。工具名以当次会话为准，不依赖旧会话 ID。
-- 没有额外授权时不启动子代理。已有阶段性提交要求，可在完成相关验证后提交本阶段文件；不要顺带推送、重写历史或夹带无关修改。
+- 用户明确要求只由一个 Agent 工作，不启动子代理。已有阶段性提交要求，可在完成相关验证后提交本阶段文件；不要顺带推送、重写历史或夹带无关修改。
 - 源码遵循 [中文编码规范](../documentation/7.contribution/coding_style_cn.md) / [英文编码规范](../documentation/7.contribution/coding_style_en.md)。核心接口使用英文 Doxygen `@brief`、`@param`、`@return`，必要时用 `@note` 说明锁、IRQ、地址或调用上下文约束，避免解释显而易见的语句。
-- 通用问题优先在内核/组件正确层修复；外设在 BSP common，共用 CPU 机制在 libcpu，芯片差异在板级资源接口，测试放 `examples/test`。不要复制第二套驱动。
+- 修改必须同时遵守目录职责和当前授权边界：外设在 BSP common，共用 CPU 机制在 libcpu，芯片差异在板级资源接口，测试放 `examples/test`。当前公共代码只读；确认属于内核/组件的问题应保留证据及修复建议，不能自行修改，也不能复制到架构目录绕过限制。
 - 改动后先运行针对性检查；涉及公共 CPU/ABI/SMP 行为时覆盖 UP/SMP、Nano/Smart、软件 refill/硬件 PTW，必要时加标准版。网络改动运行模型及两款 BSP 矩阵。若工具或硬件缺失，明确写出未执行部分。
 - 提交前检查 `git diff --check` 和暂存 diff，只暂存本任务文件。不得提交日志、ELF、磁盘镜像、下载手册、本地环境或工具链。测试生成的配置差异需核对，不用 `git reset --hard` 清理。
 - 完成一个阶段后记录提交、实际测试命令/结果、尚未解决问题，并更新本文或已有 BSP README；不能只写“测试完全”或“全部通过”而省略范围。
