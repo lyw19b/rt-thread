@@ -733,8 +733,19 @@ int ioctl(int fildes, int cmd, ...)
     arg = va_arg(ap, void *);
     va_end(ap);
 
-    /* we use fcntl for this API. */
-    return fcntl(fildes, cmd, arg);
+    struct dfs_file *file;
+    int ret = dfs_file_get_refs(&fildes, 1, &file);
+    if (ret == 0)
+    {
+        ret = dfs_file_ioctl(file, cmd, arg);
+        dfs_file_put_ref(file);
+    }
+    if (ret < 0)
+    {
+        rt_set_errno(ret);
+        return -1;
+    }
+    return ret;
 }
 RTM_EXPORT(ioctl);
 

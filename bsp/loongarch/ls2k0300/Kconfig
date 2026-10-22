@@ -50,3 +50,5 @@ config BSP_USING_SELFTEST
     default n
 
 source "$(RTT_DIR)/bsp/loongarch/common/gmac/Kconfig"
+
+source "$(RTT_DIR)/../../driver/rtos/Kconfig"

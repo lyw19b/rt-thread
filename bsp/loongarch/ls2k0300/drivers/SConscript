@@ -1,7 +1,13 @@
 from building import *
+import rtconfig
 
 # rtatomic.h returns C11 atomic typedefs; GCC warns about their qualifiers.
 cwd = GetCurrentDir()
 group = DefineGroup('LS2K0300 board', Glob('*.c'), depend=[''], CPPPATH=[cwd],
                     LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+if GetDepend('BSP_USING_LAXPU'):
+    driver_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT,
+                                            '..', '..', 'driver', 'rtos'))
+    group = group + SConscript(os.path.join(driver_dir, 'SConscript'),
+                       variant_dir='openlanpu', duplicate=0)
 Return('group')
