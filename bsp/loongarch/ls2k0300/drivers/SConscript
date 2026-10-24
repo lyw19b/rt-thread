@@ -3,7 +3,10 @@ import rtconfig
 
 # rtatomic.h returns C11 atomic typedefs; GCC warns about their qualifiers.
 cwd = GetCurrentDir()
-group = DefineGroup('LS2K0300 board', Glob('*.c'), depend=[''], CPPPATH=[cwd],
+src = Glob('*.c')
+if not GetDepend('BSP_USING_SDIO'):
+    SrcRemove(src, ['drv_sdio.c', 'ls2k_sdio.c'])
+group = DefineGroup('LS2K0300 board', src, depend=[''], CPPPATH=[cwd],
                     LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
 if GetDepend('BSP_USING_LAXPU'):
     driver_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT,

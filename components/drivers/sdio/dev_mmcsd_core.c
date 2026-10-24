@@ -6,6 +6,7 @@
  * Change Logs:
  * Date           Author        Notes
  * 2011-07-25     weety         first version
+ * 2026-10-24     OpenLANPU Contributors    size notification slots for 64-bit hosts
  */
 
 #include <rtthread.h>
@@ -38,9 +39,9 @@
 static struct rt_thread mmcsd_detect_thread;
 static rt_uint8_t mmcsd_stack[RT_MMCSD_STACK_SIZE];
 static struct rt_mailbox mmcsd_detect_mb;
-static rt_uint32_t mmcsd_detect_mb_pool[4];
+static rt_ubase_t mmcsd_detect_mb_pool[4];
 static struct rt_mailbox mmcsd_hotpluge_mb;
-static rt_uint32_t mmcsd_hotpluge_mb_pool[4];
+static rt_ubase_t mmcsd_hotpluge_mb_pool[4];
 
 void mmcsd_host_lock(struct rt_mmcsd_host *host)
 {

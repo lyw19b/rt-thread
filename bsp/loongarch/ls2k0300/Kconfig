@@ -51,6 +51,44 @@ config BSP_USING_SELFTEST
 
 source "$(RTT_DIR)/bsp/loongarch/common/gmac/Kconfig"
 
+menuconfig BSP_USING_SDIO
+    bool "LS2K0300 SD memory card (SDIO 1.2)"
+    depends on !RT_USING_NANO
+    select RT_USING_SDIO
+    select RT_USING_MUTEX
+    select RT_USING_SEMAPHORE
+    default n
+    help
+        Native SD memory host with bounded DMA and dedicated uncached storage.
+        Firmware must supply 3.3 V card power. Insert the card before boot.
+        SDIO function devices, UHS, eMMC DDR and hot removal are not supported.
+
+if BSP_USING_SDIO
+    config BSP_SDIO_PORT
+        int "SDIO controller index"
+        range 0 1
+        default 0
+
+    config BSP_SDIO_ROOT_CLOCK_HZ
+        int "DEVICE clock before SDIO division (0 reads PLL registers)"
+        range 0 500000000
+        default 0
+        help
+            This is the clock BEFORE the shared SDIO divider at 0x16000420.
+            The driver raises the divider if needed for <=400 kHz card setup.
+            It refuses to change the divider while the other port is clocked.
+
+    config BSP_SDIO_MAX_CLOCK_HZ
+        int "Maximum SD card clock (Hz)"
+        range 400000 25000000
+        default 25000000
+
+    config BSP_SDIO_USING_FILE_TEST
+        bool "Build sd_filetest filesystem round-trip diagnostic"
+        depends on RT_USING_FINSH && RT_USING_POSIX_FS
+        default n
+endif
+
 source "$(RTT_DIR)/../../driver/rtos/Kconfig"
 
 source "$(RTT_DIR)/../../display/systemui/Kconfig"

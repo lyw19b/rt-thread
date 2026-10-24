@@ -156,6 +156,12 @@ SECTIONS
         . = ALIGN(64);
     } > SRAM :NONE
 
+    .sdio_dma (NOLOAD) : ALIGN(64)
+    {
+        *(.sdio_dma)
+        . = ALIGN(64);
+    } > SRAM :NONE
+
     _end = .;
 
     /* Stabs debugging sections.  */
