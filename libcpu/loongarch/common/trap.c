@@ -26,6 +26,7 @@
 #endif
 
 #include "loongarch.h"
+#include "kernel_map.h"
 #include "stack.h"
 #include "timer.h"
 #ifdef RT_USING_SMART
@@ -467,7 +468,12 @@ fatal:
 #define SZ_64K      0x00010000
 #define VECSIZE     0x200
 
+#ifdef KMD_USE_PAGE
+rt_align(SZ_64K) long exception_handlers[VECSIZE * 128 / sizeof(long)]
+    __attribute__((section(".exception_vectors")));
+#else
 rt_align(SZ_64K) long exception_handlers[VECSIZE * 128 / sizeof(long)];
+#endif
 
 unsigned long eentry;
 unsigned long tlbrentry;
@@ -495,9 +501,14 @@ static void configure_exception_vector(void)
     }
 
     csr_write64(eentry, LOONGARCH_CSR_EENTRY);
-    csr_write64(eentry, LOONGARCH_CSR_MERRENTRY);
+    csr_write64(LOONGARCH_ALIAS_PHYS(eentry), LOONGARCH_CSR_MERRENTRY);
 #ifdef LOONGARCH_SOFTWARE_PTW
-    csr_write64(tlbrentry, LOONGARCH_CSR_TLBRENTRY);
+#ifdef KMD_USE_PAGE
+    /* Keep the immutable bootstrap handler live while vector pages are built. */
+    csr_write64(LOONGARCH_ALIAS_PHYS(handle_tlb_sw_refill), LOONGARCH_CSR_TLBRENTRY);
+#else
+    csr_write64(LOONGARCH_ALIAS_PHYS(tlbrentry), LOONGARCH_CSR_TLBRENTRY);
+#endif
 #endif
 }
 
@@ -564,5 +575,9 @@ void trap_init(void)
 #endif
 
     set_csr_ecfg(ECFGF_SIP0 | ECFGF_SIP1 | ECFGF_IP0 | ECFGF_IP1 | ECFGF_IP2 | ECFGF_IP3 | ECFGF_IP4 | ECFGF_IP5 | ECFGF_IP6 | ECFGF_IP7 | ECFGF_IPI | ECFGF_PMC);
+
+#ifdef KMD_USE_PAGE
+    loongarch_kernel_vectors_protect();
+#endif
 
 }

@@ -1,5 +1,22 @@
 menu "RT-Thread LoongArch CPU"
 
+    choice
+        prompt "Kernel address mapping"
+        default KMD_USE_DMW
+
+    config KMD_USE_DMW
+        bool "Direct mapping windows (DMW)"
+
+    config KMD_USE_PAGE
+        bool "High-address kernel with 4 KiB page tables"
+        depends on RT_USING_SMART && SOC_LS2K0300
+        help
+            Build the kernel mappings before entering paged mode. All DMW
+            windows remain disabled. Kernel RAM and devices use high virtual
+            addresses; user pointers and DMA addressing are unchanged.
+
+    endchoice
+
     config RT_USING_FPU
         bool
         default y

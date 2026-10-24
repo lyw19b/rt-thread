@@ -14,7 +14,9 @@ INCLUDE "link_stacksize.lds"
 OUTPUT_FORMAT("elf64-loongarch", "elf64-loongarch", "elf64-loongarch")
 OUTPUT_ARCH(loongarch)
 
-ENTRY(_start)
+PROVIDE(__kernel_load_offset__ = 0);
+PROVIDE(__kernel_entry = _start);
+ENTRY(__kernel_entry)
 PHDRS
 {
     text PT_LOAD FLAGS(5);
@@ -26,14 +28,14 @@ SECTIONS
 
     /* __STACKSIZE__ = 4096; */
     __text_start = .;
-    .start :
+    .start : AT(ADDR(.start) - __kernel_load_offset__)
     {
         *(.start);
     } > SRAM :text
 
     . = ALIGN(8);
 
-    .text :
+    .text : AT(ADDR(.text) - __kernel_load_offset__)
     {
         *(.text)                        /* remaining code */
         *(.text.*)                      /* remaining code */
@@ -69,18 +71,18 @@ SECTIONS
         _etext = .;
     } > SRAM
 
-    .eh_frame_hdr :
+    .eh_frame_hdr : AT(ADDR(.eh_frame_hdr) - __kernel_load_offset__)
     {
          *(.eh_frame_hdr)
          *(.eh_frame_entry)
     } > SRAM
-    .eh_frame : ONLY_IF_RO { KEEP (*(.eh_frame)) } > SRAM
+    .eh_frame : AT(ADDR(.eh_frame) - __kernel_load_offset__) ONLY_IF_RO { KEEP (*(.eh_frame)) } > SRAM
 
     . = ALIGN(8);
     __text_end = .;
     __text_size = __text_end - __text_start;
 
-    .data ALIGN(4096) :
+    .data ALIGN(4096) : AT(ADDR(.data) - __kernel_load_offset__)
     {
         *(.data)
         *(.data.*)
@@ -96,7 +98,7 @@ SECTIONS
     } > SRAM :data
 
     . = ALIGN(8);
-    .ctors :
+    .ctors : AT(ADDR(.ctors) - __kernel_load_offset__)
     {
         PROVIDE(__ctors_start__ = .);
         KEEP(*(SORT(.init_array.*)))
@@ -104,7 +106,7 @@ SECTIONS
         PROVIDE(__ctors_end__ = .);
     } > SRAM
 
-    .dtors :
+    .dtors : AT(ADDR(.dtors) - __kernel_load_offset__)
     {
         PROVIDE(__dtors_start__ = .);
         KEEP(*(SORT(.fini_array.*)))
@@ -113,7 +115,7 @@ SECTIONS
     } > SRAM
 
     /* The BSP reserves secondary stacks only on multicore parts. */
-    .stack :
+    .stack : AT(ADDR(.stack) - __kernel_load_offset__)
     {
         . = ALIGN(64);
         __stack_start__ = .;
@@ -129,7 +131,7 @@ SECTIONS
         __stack_cpu1 = .;
     } > SRAM
 
-    .sbss :
+    .sbss : AT(ADDR(.sbss) - __kernel_load_offset__)
     {
     __bss_start = .;
         *(.sbss)
@@ -138,20 +140,27 @@ SECTIONS
         *(.scommon)
     } > SRAM
 
-    .bss :
+    .bss (NOLOAD) : AT(ADDR(.bss) - __kernel_load_offset__)
     {
         *(.bss)
         *(.bss.*)
         *(.dynbss)
         *(COMMON)
 
+        . = ALIGN(65536);
+        __vectors_start = .;
+        *(.exception_vectors)
+        . = ALIGN(4096);
+        __vectors_end = .;
+
     . = ALIGN(8);
     __bss_end = .;
     } > SRAM
 
     /* DMA storage is never initialized through the cached kernel alias. */
-    .gmac_dma (NOLOAD) : ALIGN(64)
+    .gmac_dma (NOLOAD) : ALIGN(4096)
     {
+        __dma_start = .;
         *(.gmac_dma)
         . = ALIGN(64);
     } > SRAM :NONE
@@ -160,6 +169,8 @@ SECTIONS
     {
         *(.sdio_dma)
         . = ALIGN(64);
+        . = ALIGN(4096);
+        __dma_end = .;
     } > SRAM :NONE
 
     _end = .;

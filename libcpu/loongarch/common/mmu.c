@@ -226,8 +226,14 @@ void *rt_hw_mmu_v2p(rt_aspace_t aspace, void *vaddr)
     rt_ubase_t va = (rt_ubase_t)vaddr;
     rt_ubase_t *pte;
 
+#ifndef KMD_USE_PAGE
     if (aspace == &rt_kernel_space && (va >> 60 == 9 || va >> 60 == 8))
         return (void *)(va & 0x0000ffffffffffffUL);
+#else
+    /* Never interpret an obsolete DMW alias as a canonical paged address. */
+    if ((va >> 38) != 0 && (va >> 38) != ((1UL << 26) - 1))
+        return ARCH_MAP_FAILED;
+#endif
     
     pte = walk(aspace, va, RT_FALSE);
     
@@ -250,6 +256,15 @@ void rt_hw_aspace_switch(rt_aspace_t aspace)
 {
     rt_base_t level = rt_hw_local_irq_disable();
     rt_ubase_t pa = ARCH_PAGE_PA_MASK(aspace->page_table);
+
+#ifdef KMD_USE_PAGE
+    if (aspace == &rt_kernel_space)
+    {
+        extern rt_ubase_t loongarch_empty_pgdl[];
+
+        pa = ARCH_PAGE_PA_MASK(loongarch_empty_pgdl);
+    }
+#endif
 
     csr_write64(pa, LOONGARCH_CSR_PGDL);
     rt_hw_tlb_invalidate_all_local();
@@ -281,7 +296,7 @@ void *rt_hw_mmu_tbl_get(void)
  *
  * @param    table is the preallocated root page table.
  *
- * @param    pv_off is the generic physical-to-virtual offset, unused by this DMW port.
+ * @param    pv_off is the generic physical-to-virtual offset, set by the BSP.
  *
  * @return   Zero after initialization.
  */
@@ -298,8 +313,8 @@ int rt_hw_mmu_map_init(rt_aspace_t aspace, void *vaddr, rt_ubase_t size,
 /**
  * @brief    Activate the kernel page-table roots on the boot CPU.
  *
- * @note     The kernel image uses DMW1. This installs PGDH for mapped kernel
- *           addresses, installs PGDL, and switches the page allocator out of early mode.
+ * @note     PAGE mode reuses the populated bootstrap root; DMW mode starts with
+ *           an empty root for dynamic mappings. Both finish early page allocation.
  *
  * @param    aspace is the initialized kernel address space.
  *
@@ -309,7 +324,7 @@ int rt_hw_mmu_map_init(rt_aspace_t aspace, void *vaddr, rt_ubase_t size,
  */
 void rt_hw_mmu_setup(rt_aspace_t aspace, struct mem_desc *descs, int count)
 {
-    /* The kernel image uses DMW1; PGDH serves MPR and ioremap addresses. */
+    /* PAGE's root already contains permanent RAM/device mappings. Do not clear it. */
     rt_ubase_t pa = ARCH_PAGE_PA_MASK(aspace->page_table);
     csr_write64(pa, LOONGARCH_CSR_PGDH);
     rt_hw_aspace_switch(aspace);

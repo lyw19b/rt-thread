@@ -30,7 +30,7 @@ unsigned long fw_arg2;
  * @note     Runs on each CPU with local IRQs masked. Software refill explicitly
  *           disables hardware PTW; the hardware mode requires CPUCFG2.PTW support.
  */
-static void mmu_init(void)
+void loongarch_mmu_init(void)
 {
     unsigned long width = ARCH_PAGE_SHIFT - 3;
     unsigned long pwcl, pwch;
@@ -68,6 +68,6 @@ void init_cpu_early(void)
 {
     trap_init();
 #ifdef RT_USING_SMART
-    mmu_init();
+    loongarch_mmu_init();
 #endif
 }

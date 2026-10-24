@@ -16,6 +16,7 @@
 
 #include <mm_aspace.h>
 #include <mm_page.h>
+#include "kernel_map.h"
 
 struct mem_desc
 {
@@ -53,10 +54,10 @@ struct mem_desc
 #define MMU_PG_LEVEL_1_SHIFT     (MMU_PG_LEVEL_2_SHIFT - ARCH_PAGE_LEVEL_SHIFT)
 
 
-#define ARCH_PAGE_PA_MASK(x) ((rt_ubase_t)(x) & ARCH_PAGE_ADDRESS_MASK)
-#define ARCH_PAGE_VA_MASK(x) ((rt_ubase_t)(x) | 0x9000000000000000UL)
+#define ARCH_PAGE_PA_MASK(x) (LOONGARCH_ALIAS_PHYS(x) & ARCH_PAGE_ADDRESS_MASK)
+#define ARCH_PAGE_VA_MASK(x) LOONGARCH_PHYS_CACHED(x)
 
-#define ARCH_PAGE_PA2VA(x) (x | 0x9000000000000000UL)
+#define ARCH_PAGE_PA2VA(x) LOONGARCH_PHYS_CACHED(x)
 
 #define RT_HW_MMU_PROT_READ    1
 #define RT_HW_MMU_PROT_WRITE   2
@@ -263,7 +264,12 @@ rt_inline rt_bool_t rt_hw_mmu_attr_test_perm(size_t attr, rt_base_t prot)
 #define MMU_MAP_ERROR_CONFLICT   -4
 
 
+#ifdef KMD_USE_PAGE
+/* The fixed RAM/device windows are outside the dynamic aspace allocator. */
+#define KERNEL_VADDR_SIZE  (0x2000000000UL - ARCH_PAGE_SIZE)
+#else
 #define KERNEL_VADDR_SIZE  (0x4000000000UL - ARCH_PAGE_SIZE)
+#endif
 #define KERNEL_VADDR_END   (0xffffffc000000000UL + KERNEL_VADDR_SIZE)
 
 #endif /* _ASM_MMU_H */

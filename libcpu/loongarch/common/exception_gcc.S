@@ -116,13 +116,29 @@ START_POINT_END(ret_from_exception)
  * @note TLBRSAVE preserves t0; the walker loads the even/odd leaf pair using
  *       the configured directory levels. Invalid leaves take the page-fault path.
  */
+#ifdef KMD_USE_PAGE
+    /* The bootstrap uses this physical entry before trap_init copies vectors. */
+    .balign 4096
+#endif
 START_POINT(handle_tlb_sw_refill)
     csrwr   t0, LOONGARCH_CSR_TLBRSAVE
     csrrd   t0, LOONGARCH_CSR_PGD
+    beqz    t0, .Lrefill_missing
     lddir   t0, t0, 3
+    beqz    t0, .Lrefill_missing
     lddir   t0, t0, 1
+    beqz    t0, .Lrefill_missing
     ldpte   t0, 0
     ldpte   t0, 1
+    b       .Lrefill_fill
+
+.Lrefill_missing:
+    /* An absent directory must fault, never interpret physical page zero as
+     * another table. Firmware may have left arbitrary data in that page. */
+    csrwr   zero, LOONGARCH_CSR_TLBRELO0
+    csrwr   zero, LOONGARCH_CSR_TLBRELO1
+
+.Lrefill_fill:
     tlbfill
     csrrd   t0, LOONGARCH_CSR_TLBRSAVE
     ertn

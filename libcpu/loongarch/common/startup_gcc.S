@@ -12,6 +12,7 @@
 #include "regdef.h"
 #include "rtconfig.h"
 #include "asm-offsets.h"
+#include "kernel_map.h"
 
 
 .macro init_direct_windows
@@ -34,14 +35,36 @@
 /**
  * @brief    Enter the kernel on the boot CPU using firmware arguments a0-a2.
  *
- * @note     Establishes the direct-map windows, clears BSS, preserves firmware
- *           arguments, and selects the boot stack before entering C initialization.
- *           Local IRQs remain masked until the kernel starts scheduling.
+ * @note     DMW mode installs direct windows. PAGE mode starts at its physical
+ *           load address and builds tables before switching to its high address.
+ *           Both paths clear BSS and preserve firmware arguments; IRQs stay masked.
  */
     .global         _start
     .section ".start", "ax"
 _start:
 
+#ifdef KMD_USE_PAGE
+    /* Firmware loads this image at its physical ELF entry, in direct mode. */
+    li.w    t0, 0x8
+    csrwr   t0, LOONGARCH_CSR_CRMD
+    csrwr   zero, LOONGARCH_CSR_DMWIN0
+    csrwr   zero, LOONGARCH_CSR_DMWIN1
+    csrwr   zero, LOONGARCH_CSR_DMWIN2
+    csrwr   zero, LOONGARCH_CSR_DMWIN3
+    bl      init_bss
+    bl      save_boot_args
+    la.pcrel sp, __stack_end__
+    bl      loongarch_boot_map
+    la.abs  s0, .Lprimary_paged
+    b       loongarch_enter_paging
+
+.Lprimary_paged:
+    init_privileged_state
+    bl      init_clear_regs
+    la.pcrel sp, __stack_end__
+    bl      init_cpu_early
+    b       debug_trace
+#else
     init_direct_windows
 
 	/* Continue through the cached DMW1 alias at 0x9000.... */
@@ -65,6 +88,8 @@ _start:
 	la.pcrel	sp, __stack_end__
 
 	bl 		init_cpu_early
+
+#endif
 
 debug_trace:
 	la.pcrel    t0, rtthread_startup
@@ -128,20 +153,65 @@ init_clear_regs:
 	move    s8, zero
 	ret
 
+#ifdef KMD_USE_PAGE
+/* Enter paged execution atomically through the architectural refill return.
+ * s0 is the high virtual continuation. No low identity mapping is installed.
+ * This path uses only PC-relative physical references until ERTN. */
+loongarch_enter_paging:
+    bl      loongarch_mmu_init
+    la.pcrel t0, MMUTable
+    csrwr   t0, LOONGARCH_CSR_PGDH
+    la.pcrel t0, loongarch_empty_pgdl
+    csrwr   t0, LOONGARCH_CSR_PGDL
+    la.pcrel t0, handle_tlb_sw_refill
+    csrwr   t0, LOONGARCH_CSR_TLBRENTRY
+    ori     t0, s0, 1
+    csrwr   t0, LOONGARCH_CSR_TLBRERA
+    csrwr   zero, LOONGARCH_CSR_TLBRPRMD
+    dbar    0
+    ibar    0
+    ertn
+#endif
+
 #ifdef RT_USING_SMP
     .section ".text", "ax"
 /**
  * @brief    Enter a secondary CPU through the IOCSR mailbox entry address.
  *
- * @note     Initializes CPU-local direct-map state and selects the stack indexed
+ * @note     Initializes the selected CPU-local mapping and the stack indexed
  *           by hardware CPU ID. Shared BSS and firmware arguments belong to CPU 0
  *           and must not be cleared again. Invalid CPU IDs remain parked.
  */
     .global loongarch_secondary_entry
 loongarch_secondary_entry:
+#ifdef KMD_USE_PAGE
+    li.w    t0, 0x8
+    csrwr   t0, LOONGARCH_CSR_CRMD
+    csrwr   zero, LOONGARCH_CSR_DMWIN0
+    csrwr   zero, LOONGARCH_CSR_DMWIN1
+    csrwr   zero, LOONGARCH_CSR_DMWIN2
+    csrwr   zero, LOONGARCH_CSR_DMWIN3
+    /* Set up a private physical stack before the C walker setup. */
+    csrrd   t0, LOONGARCH_CSR_CPUID
+    andi    t0, t0, 0x3ff
+    li.w    t1, RT_CPUS_NR
+    bgeu    t0, t1, secondary_park
+    beqz    t0, secondary_park
+#if RT_CPUS_NR > 1
+    li.w    t1, __STACKSIZE__
+    mul.d   t0, t0, t1
+    la.pcrel sp, loongarch_secondary_stacks
+    add.d   sp, sp, t0
+    la.abs  s0, secondary_cached
+    b       loongarch_enter_paging
+#else
+    b       secondary_park
+#endif
+#else
     init_direct_windows
     la.abs  t0, secondary_cached
     jr      t0
+#endif
 
 secondary_cached:
     init_privileged_state

@@ -232,6 +232,7 @@ static void test_file(void)
     CHECK(CALL(SMART_SYS_CLOSE, fd, 0, 0) == 0);
     CHECK(CALL(SMART_SYS_UNLINK, "/roundtrip", 0, 0) == 0);
     CHECK(CALL(SMART_SYS_WRITE, 1, 0x9000000000200000UL, 4) < 0);
+    CHECK(CALL(SMART_SYS_WRITE, 1, 0xffffffe000200000UL, 4) < 0);
     puts_test("SMART file and invalid pointer PASS\n");
 }
 
@@ -274,7 +275,7 @@ static void test_memory_fork(int loops)
 static void test_fault(void)
 {
     int kind;
-    for (kind = 0; kind < 6; kind++)
+    for (kind = 0; kind < 8; kind++)
     {
         long pid = CALL(SMART_SYS_FORK, 0, 0, 0);
         int status = 0;
@@ -301,6 +302,12 @@ static void test_fault(void)
                 break;
             case 5:
                 __asm__ volatile("asrtle.d %0, %1" ::"r"(1L), "r"(0L));
+                break;
+            case 6:
+                *(volatile long *)0xffffffe000200000UL = 42;
+                break;
+            case 7:
+                *(volatile long *)0xffffffe116100000UL = 42;
                 break;
             }
             exit_test(0);

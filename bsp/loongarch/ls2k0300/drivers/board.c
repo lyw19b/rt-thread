@@ -26,7 +26,7 @@ void rt_hw_board_init(void)
         .name = "low DDR",
     };
 
-    rt_kmem_pvoff_set(-0x9000000000000000UL);
+    rt_kmem_pvoff_set(-LOONGARCH_CACHED_BASE);
     rt_hw_mmu_map_init(&rt_kernel_space, (void *)0xffffffc010000000UL,
                        16UL * 1024 * 1024, MMUTable, PV_OFFSET);
     rt_page_init(pages);

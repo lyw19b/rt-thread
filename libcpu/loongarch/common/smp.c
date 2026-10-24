@@ -6,6 +6,7 @@
 #include <rtthread.h>
 #include "loongarch.h"
 #include "timer.h"
+#include "kernel_map.h"
 #ifdef RT_USING_SMART
 #include "mmu.h"
 #endif
@@ -254,7 +255,7 @@ void rt_hw_secondary_cpu_up(void)
     {
         rt_ubase_t start = drdtime();
 
-        mailbox_write(cpu, (rt_ubase_t)loongarch_secondary_entry & 0x0000ffffffffffffUL);
+        mailbox_write(cpu, LOONGARCH_ALIAS_PHYS(loongarch_secondary_entry));
         ipi_send(cpu, RT_SCHEDULE_IPI);
         while (!(loongarch_cpu_online_mask() & (1U << cpu)))
         {

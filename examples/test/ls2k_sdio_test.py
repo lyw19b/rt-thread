@@ -46,6 +46,7 @@ def cross_build(output, toolchain):
         'standard-up': base + '\nCONFIG_RT_USING_SMART=n\nCONFIG_RT_USING_SMP=n\n',
         'sdio1': base + '\nCONFIG_BSP_SDIO_PORT=1\n',
         'smart-sdio0-gmac0': base,
+        'page-sdio0-gmac0': base + '\nCONFIG_KMD_USE_DMW=n\nCONFIG_KMD_USE_PAGE=y\n',
     }
 
     for name, config in variants.items():
@@ -79,7 +80,8 @@ def cross_build(output, toolchain):
                          for line in symbols.splitlines() if len(line.split()) == 3}
             assert addresses['__bss_end'] <= addresses['storage'] < addresses['_end']
             assert addresses['storage'] % 64 == 0
-            assert addresses['_end'] & 0x0000ffffffffffff < 0x10000000
+            kernel_base = 0xffffffe000000000 if name.startswith('page-') else 0x9000000000000000
+            assert addresses['_end'] - kernel_base < 0x10000000
 
         assert ('#define RT_USING_SMART\n' in header) == (name != 'standard-up')
         if re.search(r'warning:|error:', log_path.read_text()):
@@ -92,7 +94,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cc', default=os.environ.get('CC', 'cc'))
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--build', action='store_true', help='also cross-build four isolated BSP variants')
+    parser.add_argument('--build', action='store_true', help='also cross-build five isolated BSP variants')
     parser.add_argument('--toolchain', type=Path, help='LoongArch musl compiler bin directory')
     args = parser.parse_args()
     if args.build and not args.toolchain:

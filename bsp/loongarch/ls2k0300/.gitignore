@@ -3,3 +3,4 @@ rtthread.asm
 
 compile_commands.json
 link_stacksize.lds
+link_kmd.lds
