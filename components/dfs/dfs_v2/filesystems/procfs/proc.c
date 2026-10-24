@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Protect procfs tree and retained entry lifetimes
  */
 
 #include "proc.h"
@@ -33,6 +34,28 @@ static struct proc_dentry _proc_root = {
     .data = RT_NULL,
 };
 
+static struct rt_mutex proc_tree_mutex;
+
+static int proc_tree_init(void)
+{
+    return rt_mutex_init(&proc_tree_mutex, "proctree", RT_IPC_FLAG_PRIO);
+}
+INIT_PREV_EXPORT(proc_tree_init);
+
+void proc_lock(void)
+{
+    rt_err_t error = rt_mutex_take(&proc_tree_mutex, RT_WAITING_FOREVER);
+
+    RT_ASSERT(error == RT_EOK);
+    RT_UNUSED(error);
+}
+
+void proc_unlock(void)
+{
+    rt_mutex_release(&proc_tree_mutex);
+}
+
+/* All list walkers hold proc_tree_mutex until acquiring a result reference. */
 static int _proc_find(struct proc_dentry **parent, const char *name)
 {
     struct proc_dentry *dentry = RT_NULL, *tmp;
@@ -64,7 +87,18 @@ static int proc_find(struct proc_dentry **parent, const char **name, rt_bool_t f
         *parent = &_proc_root;
     }
 
+    if ((*parent)->removed)
+    {
+        *parent = RT_NULL;
+        return -ENOENT;
+    }
+
     tmp = rt_strdup(*name);
+    if (!tmp)
+    {
+        *parent = RT_NULL;
+        return -ENOMEM;
+    }
     if (tmp)
     {
         char *begin = tmp, *end = RT_NULL;
@@ -101,11 +135,23 @@ static int proc_find(struct proc_dentry **parent, const char **name, rt_bool_t f
                 {
                     if ((*parent)->ops && (*parent)->ops->lookup)
                     {
-                        *parent = (*parent)->ops->lookup(*parent, begin);
-                        if (*parent == RT_NULL)
+                        struct proc_dentry *directory = proc_acquire(*parent);
+                        struct proc_dentry *found;
+
+                        /* A PID/FD lookup can acquire locks above proc_tree_mutex. */
+                        proc_unlock();
+                        found = directory->ops->lookup(directory, begin);
+                        proc_lock();
+
+                        if (directory->removed)
                         {
-                            ret = -1;
+                            proc_release(found);
+                            found = RT_NULL;
                         }
+
+                        proc_release(directory);
+                        *parent = found;
+                        ret = found ? 0 : -ENOENT;
                     }
                     else
                     {
@@ -206,7 +252,8 @@ static struct proc_dentry *proc_create(struct proc_dentry **parent, const char *
     if (ret >= 0)
     {
         dentry = *parent;
-        ret = proc_find(&dentry, &name, 1);
+        /* Creation checks only registered children; no callbacks under lock. */
+        ret = _proc_find(&dentry, name);
         if (ret < 0)
         {
             dentry = rt_calloc(1, sizeof(struct proc_dentry));
@@ -215,12 +262,17 @@ static struct proc_dentry *proc_create(struct proc_dentry **parent, const char *
                 dentry->mode = mode;
                 dentry->ref_count = 1;
                 dentry->name = rt_strdup(name);
+                if (!dentry->name)
+                {
+                    rt_free(dentry);
+                    return RT_NULL;
+                }
+
                 dfs_vfs_init_node(&dentry->node);
             }
         }
         else
         {
-            proc_release(dentry);
             dentry = RT_NULL;
         }
     }
@@ -239,7 +291,7 @@ struct proc_dentry *proc_acquire(struct proc_dentry *dentry)
 {
     if (dentry)
     {
-        dentry->ref_count += 1;
+        rt_atomic_add(&dentry->ref_count, 1);
     }
 
     return dentry;
@@ -254,34 +306,31 @@ struct proc_dentry *proc_acquire(struct proc_dentry *dentry)
  */
 void proc_release(struct proc_dentry *dentry)
 {
-    if (dentry)
+    if (dentry && rt_atomic_dec_and_test(&dentry->ref_count))
     {
-        if (dentry->ref_count == 1)
-        {
-            if (dentry->name)
-            {
-                rt_free(dentry->name);
-            }
+        struct proc_dentry *parent = dentry->parent;
 
-            if (S_ISLNK(dentry->mode) && dentry->data)
-            {
-                rt_free(dentry->data);
-            }
+        RT_ASSERT(dentry != &_proc_root);
+        RT_ASSERT(!dentry->linked);
 
-            rt_free(dentry);
-        }
-        else
+        rt_free(dentry->name);
+        if (S_ISLNK(dentry->mode))
         {
-            dentry->ref_count -= 1;
+            rt_free(dentry->data);
         }
+
+        rt_free(dentry);
+        /* A retained child keeps its detached parent alive. */
+        proc_release(parent);
     }
 }
 
 static struct proc_dentry *proc_register(struct proc_dentry *parent, struct proc_dentry *child)
 {
-    child->parent = parent;
+    child->parent = proc_acquire(parent);
     dfs_vfs_append_node(&parent->node, &child->node);
-    child->ref_count += 1;
+    child->linked = RT_TRUE;
+    rt_atomic_add(&child->ref_count, 1);
     child->pid = parent->pid;
 
     return child;
@@ -303,6 +352,8 @@ struct proc_dentry *proc_mkdir_data(const char *name, mode_t mode, struct proc_d
 {
     struct proc_dentry *dentry, *_parent = parent;
 
+    proc_lock();
+
     if (mode == 0)
         mode = (S_IRUSR | S_IRGRP | S_IROTH) | (S_IXUSR | S_IXGRP | S_IXOTH);
 
@@ -315,6 +366,7 @@ struct proc_dentry *proc_mkdir_data(const char *name, mode_t mode, struct proc_d
         dentry = proc_register(_parent, dentry);
     }
     proc_release(_parent);
+    proc_unlock();
 
     return dentry;
 }
@@ -380,6 +432,8 @@ struct proc_dentry *proc_create_data(const char *name, mode_t mode, struct proc_
 {
     struct proc_dentry *dentry, *_parent = parent;
 
+    proc_lock();
+
     dentry = proc_create_reg(name, mode, &_parent);
     if (dentry)
     {
@@ -389,6 +443,7 @@ struct proc_dentry *proc_create_data(const char *name, mode_t mode, struct proc_
         dentry = proc_register(_parent, dentry);
     }
     proc_release(_parent);
+    proc_unlock();
 
     return dentry;
 }
@@ -409,6 +464,8 @@ struct proc_dentry *proc_create_single_data(const char *name, mode_t mode, struc
 {
     struct proc_dentry *dentry, *_parent = parent;
 
+    proc_lock();
+
     dentry = proc_create_reg(name, mode, &_parent);
     if (dentry)
     {
@@ -419,6 +476,7 @@ struct proc_dentry *proc_create_single_data(const char *name, mode_t mode, struc
         dentry = proc_register(_parent, dentry);
     }
     proc_release(_parent);
+    proc_unlock();
 
     return dentry;
 }
@@ -436,6 +494,8 @@ struct proc_dentry *proc_symlink(const char *name, struct proc_dentry *parent, c
 {
     struct proc_dentry *dentry, *_parent = parent;
 
+    proc_lock();
+
     dentry = proc_create(&_parent, name, (S_IFLNK | (S_IRUSR | S_IRGRP | S_IROTH)
                          | (S_IWUSR | S_IWGRP | S_IWOTH) | (S_IXUSR | S_IXGRP | S_IXOTH)));
     if (dentry)
@@ -452,39 +512,19 @@ struct proc_dentry *proc_symlink(const char *name, struct proc_dentry *parent, c
         }
     }
     proc_release(_parent);
+    proc_unlock();
 
     return dentry;
 }
 
 static void remove_proc_subtree(struct proc_dentry *dentry)
 {
-    struct proc_dentry *iter = RT_NULL, *iter_tmp, *tmp = RT_NULL;
-
-    dfs_vfs_for_each_subnode(iter, iter_tmp, dentry, node)
+    while (!rt_list_isempty(&dentry->node.subnode))
     {
-        if (iter == RT_NULL)
-        {
-            break;
-        }
+        struct proc_dentry *child = rt_list_entry(dentry->node.subnode.next,
+                                                struct proc_dentry, node.sibling);
 
-        if (tmp)
-        {
-            proc_release(tmp);
-            tmp = RT_NULL;
-        }
-
-        tmp = iter;
-
-        if (S_ISDIR(dentry->mode))
-        {
-            remove_proc_subtree(iter);
-        }
-    }
-
-    if (tmp)
-    {
-        proc_release(tmp);
-        tmp = RT_NULL;
+        proc_remove(child);
     }
 }
 
@@ -497,16 +537,18 @@ static void remove_proc_subtree(struct proc_dentry *dentry)
  */
 void proc_remove(struct proc_dentry *dentry)
 {
-    if (dentry && dentry != &_proc_root)
-    {
-        if (S_ISDIR(dentry->mode))
-        {
-            remove_proc_subtree(dentry);
-        }
+    proc_lock();
 
+    if (dentry && dentry != &_proc_root && dentry->linked)
+    {
+        dentry->removed = RT_TRUE;
+        remove_proc_subtree(dentry);
         dfs_vfs_remove_node(&dentry->node);
+        dentry->linked = RT_FALSE;
         proc_release(dentry);
     }
+
+    proc_unlock();
 }
 
 /**
@@ -520,7 +562,9 @@ struct proc_dentry *dfs_proc_find(const char *name)
 {
     struct proc_dentry *dentry = RT_NULL;
 
+    proc_lock();
     proc_find(&dentry, &name, 1);
+    proc_unlock();
 
     return dentry;
 }
@@ -537,11 +581,15 @@ void proc_remove_dentry(const char *name, struct proc_dentry *parent)
 {
     struct proc_dentry *dentry = parent;
 
+    proc_lock();
+
     if (proc_find(&dentry, &name, 1) >= 0)
     {
         proc_remove(dentry);
         proc_release(dentry);
     }
+
+    proc_unlock();
 }
 
 #define _COLOR_RED      "\033[31m"
@@ -608,6 +656,8 @@ static int msh_proc_dump(int argc, char** argv)
     const char *name = argc > 1 ? argv[1] : "/";
     struct proc_dentry *dentry = RT_NULL;
 
+    proc_lock();
+
     int ret = proc_find(&dentry, &name, 1);
     if (ret >= 0)
     {
@@ -615,12 +665,16 @@ static int msh_proc_dump(int argc, char** argv)
     }
     proc_release(dentry);
 
+    proc_unlock();
+
     return 0;
 }
 MSH_CMD_EXPORT_ALIAS(msh_proc_dump, proc_dump, proc dump);
 
 static int msh_proc_remove(int argc, char** argv)
 {
+    proc_lock();
+
     if (argc > 1)
     {
         const char *name = argv[1];
@@ -664,6 +718,8 @@ static int msh_proc_remove(int argc, char** argv)
     {
         rt_kprintf("proc_remove path\n");
     }
+
+    proc_unlock();
 
     return 0;
 }

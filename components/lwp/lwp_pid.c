@@ -22,6 +22,7 @@
  *                             with waitpid(pid=-1)/waitpid(pid=-pgid)/waitpid(pid=0) that only one
  *                             process can be traced while waiter suspend
  * 2024-01-25     shell        porting to new sched API
+ * 2026-10-23     OpenLANPU    Release PID ownership once under pid_mtx
  */
 
 /* includes scheduler related API */
@@ -338,10 +339,17 @@ static void lwp_pid_put_locked(pid_t pid)
  */
 void lwp_pid_put(struct rt_lwp *lwp)
 {
-    _free_proc_dentry(lwp);
-
     lwp_pid_lock_take();
+    if (lwp->pid == 0)
+    {
+        lwp_pid_lock_release();
+        return;
+    }
+
+    /* Keep removal and PID reuse ordered; only the owner drops its reference. */
+    _free_proc_dentry(lwp);
     lwp_pid_put_locked(lwp->pid);
+    lwp->pid = 0;
     if (lwp_pid_root == AVL_EMPTY)
     {
         rt_wqueue_wakeup_all(&_pid_emptyq, RT_NULL);
@@ -352,9 +360,7 @@ void lwp_pid_put(struct rt_lwp *lwp)
         lwp_pid_lock_release();
     }
 
-    /* reset pid field */
-    lwp->pid = 0;
-    /* clear reference */
+    /* clear the single reference owned by the PID table */
     lwp_ref_dec(lwp);
 }
 
@@ -377,13 +383,19 @@ void lwp_pid_put(struct rt_lwp *lwp)
  */
 void lwp_pid_rollback(struct rt_lwp *lwp)
 {
-    _free_proc_dentry(lwp);
-
     lwp_pid_lock_take();
+    if (lwp->pid == 0)
+    {
+        lwp_pid_lock_release();
+        return;
+    }
+
+    /* Keep removal and PID reuse ordered; only the owner drops its reference. */
+    _free_proc_dentry(lwp);
     lwp_pid_put_locked(lwp->pid);
+    lwp->pid = 0;
     lwp_pid_lock_release();
 
-    lwp->pid = 0;
     lwp_ref_dec(lwp);
 }
 
@@ -436,7 +448,18 @@ static void __exit_files(struct rt_lwp *lwp)
         d = lwp->fdt.fds[fd];
         if (d)
         {
-            dfs_fdtable_drop_fd(&lwp->fdt, fd);
+            int error = dfs_fdtable_drop_fd(&lwp->fdt, fd);
+
+#ifdef RT_USING_PAGECACHE
+            if (error != 0)
+            {
+                /* Transfer ownership before freeing the exiting FD table. */
+                dfs_file_defer_close(d);
+                lwp->fdt.fds[fd] = RT_NULL;
+            }
+#else
+            RT_UNUSED(error);
+#endif
         }
         fd--;
     }
@@ -2261,10 +2284,12 @@ static void _resr_cleanup(struct rt_lwp *lwp)
     {
         struct dfs_file **fds;
 
-        /* auto clean fds */
+        /* Serialize table detachment with procfs and other FD readers. */
+        dfs_file_lock();
         __exit_files(lwp);
         fds = lwp->fdt.fds;
         lwp->fdt.fds = RT_NULL;
+        dfs_file_unlock();
         LWP_UNLOCK(lwp);
 
         rt_free(fds);

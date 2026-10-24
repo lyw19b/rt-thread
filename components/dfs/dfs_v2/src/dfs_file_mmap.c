@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Retain failed final unmap closes for retry
  */
 
 #include "dfs_file.h"
@@ -209,17 +210,7 @@ static void on_varea_close(struct rt_varea *varea)
         }
 
         dfs_aspace_unmap(file, varea);
-        dfs_file_lock();
-        if (rt_atomic_load(&(file->ref_count)) == 1)
-        {
-            dfs_file_close(file);
-            dfs_file_destroy(file);
-        }
-        else
-        {
-            rt_atomic_sub(&(file->ref_count), 1);
-        }
-        dfs_file_unlock();
+        dfs_file_put_ref(file);
     }
     else
     {

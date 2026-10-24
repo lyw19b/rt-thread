@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Retain failed final closes for background retry
  * 2005-02-22     Bernard      The first version.
  * 2023-05-05     Bernard      change to dfs v2.0
  */
@@ -123,6 +124,11 @@ void dfs_file_unlock(void);
 
 int dfs_fdtable_dup(struct dfs_fdtable *fdt_dst, struct dfs_fdtable *fdt_src, int fd_src);
 int dfs_fdtable_drop_fd(struct dfs_fdtable *fdtab, int fd);
+
+#ifdef RT_USING_PAGECACHE
+void dfs_file_defer_close(struct dfs_file *file);
+void dfs_file_retry_close(void);
+#endif
 
 #ifdef DFS_USING_POSIX
 /* FD APIs */

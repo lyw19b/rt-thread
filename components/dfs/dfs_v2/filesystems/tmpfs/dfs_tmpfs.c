@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Preserve failed writeback and report errors
  * 2022-10-24     flybreak     the first version
  * 2023-02-01     xqyjlj       fix cannot open the same file repeatedly in 'w' mode
  * 2023-09-20     zmq810150896 adds truncate functionality and standardized unlink adaptations
@@ -359,8 +360,13 @@ static ssize_t dfs_tmpfs_read(struct dfs_file *file, void *buf, size_t count, of
     RT_ASSERT(d_file != NULL);
 
     rt_mutex_take(&file->vnode->lock, RT_WAITING_FOREVER);
-    ssize_t size = (ssize_t)file->vnode->size;
-    if ((ssize_t)count < size - *pos)
+    /* Cached EOF may exceed the allocated backing after failed writeback. */
+    ssize_t size = (ssize_t)d_file->size;
+    if (*pos >= size)
+    {
+        length = 0;
+    }
+    else if ((ssize_t)count < size - *pos)
     {
         length = count;
     }
@@ -398,7 +404,7 @@ static ssize_t _dfs_tmpfs_write(struct tmpfs_file *d_file, const void *buf, size
         if (ptr == NULL)
         {
             rt_set_errno(-ENOMEM);
-            return 0;
+            return -ENOMEM;
         }
 
         rt_spin_lock(&superblock->lock);
@@ -424,17 +430,18 @@ static ssize_t _dfs_tmpfs_write(struct tmpfs_file *d_file, const void *buf, size
 static ssize_t dfs_tmpfs_write(struct dfs_file *file, const void *buf, size_t count, off_t *pos)
 {
     struct tmpfs_file *d_file;
+    ssize_t ret;
 
     d_file = (struct tmpfs_file *)file->vnode->data;
     RT_ASSERT(d_file != NULL);
 
     rt_mutex_take(&file->vnode->lock, RT_WAITING_FOREVER);
 
-    count = _dfs_tmpfs_write(d_file, buf, count, pos);
+    ret = _dfs_tmpfs_write(d_file, buf, count, pos);
     file->vnode->size = d_file->size;
     rt_mutex_release(&file->vnode->lock);
 
-    return count;
+    return ret;
 }
 
 static off_t dfs_tmpfs_lseek(struct dfs_file *file, off_t offset, int wherece)
@@ -698,6 +705,10 @@ static int dfs_tmpfs_unlink(struct dfs_dentry *dentry)
 
     rt_spin_lock(&superblock->lock);
     d_file->nlink = 0;
+    if (dentry->vnode)
+    {
+        dentry->vnode->nlink = 0;
+    }
     dfs_vfs_remove_node(&d_file->node);
     rt_spin_unlock(&superblock->lock);
 
@@ -987,7 +998,7 @@ static ssize_t dfs_tmp_page_read(struct dfs_file *file, struct dfs_page *page)
 ssize_t dfs_tmp_page_write(struct dfs_page *page)
 {
     off_t pos;
-    size_t count = 0;
+    ssize_t count = 0;
     struct tmpfs_file *d_file;
 
     if (page->aspace->vnode->type == FT_DIRECTORY)

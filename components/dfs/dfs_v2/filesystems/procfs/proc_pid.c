@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Protect procfs tree and retained entry lifetimes
  */
 #define __RT_IPC_SOURCE__
 
@@ -658,21 +659,27 @@ struct proc_dentry *proc_pid_fd_lookup(struct proc_dentry *parent, const char *n
     struct rt_lwp *lwp;
     struct dfs_fdtable *table;
 
-    lwp_pid_lock_take();
-    lwp = lwp_from_pid_locked(parent->pid);
-    table = lwp ? &lwp->fdt : RT_NULL;
-    lwp_pid_lock_release();
-
-    if (!table)
+    lwp = lwp_from_pid_and_lock(parent->pid);
+    if (!lwp)
     {
         return RT_NULL;
     }
 
     dfs_file_lock();
+    table = &lwp->fdt;
+
+    if (!table || !table->fds)
+    {
+        dfs_file_unlock();
+        lwp_from_pid_release_lock(lwp);
+        return RT_NULL;
+    }
+
     for (int i = 0; i < table->maxfd; i++)
     {
         struct dfs_file *file = table->fds[i];
-        if (file)
+        /* Reserved FD slots are visible before open installs a vnode. */
+        if (file && file->vnode)
         {
             rt_snprintf(num, DIRENT_NAME_MAX, "%d", i);
             if (rt_strcmp(num, name) == 0)
@@ -683,6 +690,13 @@ struct proc_dentry *proc_pid_fd_lookup(struct proc_dentry *parent, const char *n
                     dentry->mode = (S_IFLNK | (S_IRUSR | S_IRGRP | S_IROTH) | (S_IWUSR | S_IWGRP | S_IWOTH) | (S_IXUSR | S_IXGRP | S_IXOTH));
                     dentry->ref_count = 1;
                     dentry->name = rt_strdup(name);
+                    if (!dentry->name)
+                    {
+                        proc_release(dentry);
+                        dentry = RT_NULL;
+                        break;
+                    }
+
                     dentry->data = (void *)dfs_dentry_full_path(file->dentry);
 
                     if (dentry->data == RT_NULL)
@@ -706,6 +720,13 @@ struct proc_dentry *proc_pid_fd_lookup(struct proc_dentry *parent, const char *n
                         }
                     }
 
+                    if (!dentry->data)
+                    {
+                        proc_release(dentry);
+                        dentry = RT_NULL;
+                        break;
+                    }
+
                     dentry->pid = parent->pid;
                     break;
                 }
@@ -713,6 +734,7 @@ struct proc_dentry *proc_pid_fd_lookup(struct proc_dentry *parent, const char *n
         }
     }
     dfs_file_unlock();
+    lwp_from_pid_release_lock(lwp);
 
     return dentry;
 }
@@ -724,31 +746,34 @@ int proc_pid_fd_getdents(struct dfs_file *file, struct dirent *dirp, uint32_t co
     struct rt_lwp *lwp;
     struct dfs_fdtable *table;
 
-    lwp_pid_lock_take();
-    lwp = lwp_from_pid_locked(entry->pid);
-    LWP_LOCK(lwp);
-    table = lwp ? &lwp->fdt : RT_NULL;
-
-    if (!table->fds)
+    lwp = lwp_from_pid_and_lock(entry->pid);
+    if (!lwp)
     {
-        LWP_UNLOCK(lwp);
-        lwp_pid_lock_release();
+        return 0;
+    }
+
+    dfs_file_lock();
+    table = &lwp->fdt;
+
+    if (!table || !table->fds)
+    {
+        dfs_file_unlock();
+        lwp_from_pid_release_lock(lwp);
         return 0;
     }
 
     count = (count / sizeof(struct dirent));
     if (count == 0)
     {
-        LWP_UNLOCK(lwp);
-        lwp_pid_lock_release();
+        dfs_file_unlock();
+        lwp_from_pid_release_lock(lwp);
         return -EINVAL;
     }
 
-    dfs_file_lock();
     for (int i = 0; i < table->maxfd; i++)
     {
         struct dfs_file *df = table->fds[i];
-        if (df)
+        if (df && df->vnode)
         {
             if (index >= file->fpos)
             {
@@ -770,8 +795,7 @@ int proc_pid_fd_getdents(struct dfs_file *file, struct dirent *dirp, uint32_t co
         }
     }
     dfs_file_unlock();
-    LWP_UNLOCK(lwp);
-    lwp_pid_lock_release();
+    lwp_from_pid_release_lock(lwp);
 
     if (ret > 0)
     {
@@ -840,6 +864,8 @@ int proc_pid(int pid)
     char pid_str[64] = { 0 };
     struct proc_dentry *dentry;
 
+    proc_lock();
+
     rt_snprintf(pid_str, 64, "%d", pid);
     pid_str[63] = 0;
 
@@ -893,6 +919,8 @@ int proc_pid(int pid)
         }
         proc_release(dentry);
     }
+
+    proc_unlock();
 
     return 0;
 }

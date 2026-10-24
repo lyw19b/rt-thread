@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Retain failed final closes for background retry
  * 2005-02-22     Bernard      The first version.
  * 2017-12-11     Bernard      Use rt_free to instead of free in fd_is_open().
  * 2018-03-20     Heyuanjie    dynamic allocation FD
@@ -15,6 +16,9 @@
 #include <dfs_dentry.h>
 #include <dfs_file.h>
 #include <dfs_mnt.h>
+#ifdef RT_USING_PAGECACHE
+#include <dfs_pcache.h>
+#endif
 
 #include <rtservice.h>
 
@@ -38,6 +42,61 @@ static rt_bool_t _dfs_init_ok = RT_FALSE;
 static struct rt_mutex fslock;
 static struct rt_mutex fdlock;
 static struct dfs_fdtable _fdtab = {0};
+
+#ifdef RT_USING_PAGECACHE
+static rt_list_t deferred_close_list = RT_LIST_OBJECT_INIT(deferred_close_list);
+
+/* The caller transfers its last file reference; no allocation under OOM. */
+void dfs_file_defer_close(struct dfs_file *file)
+{
+    dfs_file_lock();
+    RT_ASSERT(rt_atomic_load(&file->ref_count) == 1);
+    RT_ASSERT(file->deferred_close.next == RT_NULL);
+    rt_list_insert_before(&deferred_close_list, &file->deferred_close);
+    dfs_file_unlock();
+}
+
+/* Called by pcache without holding its locks. Retry one owner per iteration. */
+void dfs_file_retry_close(void)
+{
+    struct dfs_file *file;
+
+    if (dfs_file_lock() != RT_EOK)
+    {
+        return;
+    }
+
+    if (rt_list_isempty(&deferred_close_list))
+    {
+        dfs_file_unlock();
+        return;
+    }
+
+    file = rt_list_entry(deferred_close_list.next, struct dfs_file, deferred_close);
+    rt_list_remove(&file->deferred_close);
+    file->deferred_close.next = RT_NULL;
+
+    /* An unlinked file with no remaining reader or mapping may be discarded.
+     * Linked files keep their dirty data and vnode until writeback succeeds. */
+    if (file->dentry && file->vnode && file->vnode->nlink == 0 &&
+        rt_atomic_load(&file->ref_count) == 1 &&
+        rt_atomic_load(&file->dentry->ref_count) == 1 && file->vnode->aspace)
+    {
+        file->vnode->size = 0;
+        dfs_aspace_clean(file->vnode->aspace);
+    }
+
+    if (dfs_file_close(file) == 0)
+    {
+        dfs_file_destroy(file);
+    }
+    else
+    {
+        rt_list_insert_before(&deferred_close_list, &file->deferred_close);
+    }
+    dfs_file_unlock();
+}
+#endif
 
 /**
  * @brief Expand the file descriptor table to accommodate a specified file descriptor
@@ -584,18 +643,25 @@ void dfs_file_put_ref(struct dfs_file *file)
         return;
     }
 
-    if (file->magic == DFS_FD_MAGIC &&
-        rt_atomic_load(&file->ref_count) > 0 &&
-        dfs_file_close(file) == 0)
+    if (file->magic == DFS_FD_MAGIC && rt_atomic_load(&file->ref_count) > 0)
     {
-        if (rt_atomic_load(&file->ref_count) == 1)
+        if (dfs_file_close(file) == 0)
         {
-            dfs_file_destroy(file);
+            if (rt_atomic_load(&file->ref_count) == 1)
+            {
+                dfs_file_destroy(file);
+            }
+            else
+            {
+                rt_atomic_sub(&file->ref_count, 1);
+            }
         }
+#ifdef RT_USING_PAGECACHE
         else
         {
-            rt_atomic_sub(&file->ref_count, 1);
+            dfs_file_defer_close(file);
         }
+#endif
     }
     dfs_file_unlock();
 }

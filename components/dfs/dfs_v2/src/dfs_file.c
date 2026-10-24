@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Preserve failed writeback and report errors
  * 2023-05-05     Bernard      Implement file APIs in dfs v2.0
  */
 
@@ -975,7 +976,13 @@ int dfs_file_close(struct dfs_file *file)
 #ifdef RT_USING_PAGECACHE
                 if (file->vnode->aspace)
                 {
-                    dfs_aspace_flush(file->vnode->aspace);
+                    ret = dfs_aspace_flush(file->vnode->aspace);
+                    if (ret < 0)
+                    {
+                        /* Existing DFS close-error semantics retain the open FD. */
+                        dfs_file_unlock();
+                        return ret;
+                    }
                 }
 #endif
                 ret = file->fops->close(file);
@@ -1185,9 +1192,14 @@ ssize_t dfs_file_pwrite(struct dfs_file *file, const void *buf, size_t len, off_
                         ret = file->fops->write(file, buf, len, &pos);
                     }
 
-                    if (file->flags & O_SYNC)
+                    if (ret >= 0 && (file->flags & O_SYNC))
                     {
-                        file->fops->flush(file);
+                        int error = dfs_file_fsync(file);
+
+                        if (error < 0)
+                        {
+                            ret = error;
+                        }
                     }
                 }
                 else
@@ -1268,9 +1280,14 @@ ssize_t dfs_file_write(struct dfs_file *file, const void *buf, size_t len)
                         ret = file->fops->write(file, buf, len, &pos);
                     }
 
-                    if (file->flags & O_SYNC)
+                    if (ret >= 0 && (file->flags & O_SYNC))
                     {
-                        file->fops->flush(file);
+                        int error = dfs_file_fsync(file);
+
+                        if (error < 0)
+                        {
+                            ret = error;
+                        }
                     }
                 }
                 else
@@ -1798,27 +1815,31 @@ int dfs_file_fcntl(int fd, int cmd, unsigned long arg)
  */
 int dfs_file_fsync(struct dfs_file *file)
 {
-    int ret = -EBADF;
+    int ret = -ENOSYS;
 
-    if (file)
+    if (!file || !file->fops || !file->vnode)
     {
-        if (file->fops->flush)
-        {
-            if (dfs_is_mounted(file->vnode->mnt) == 0)
-            {
+        return -EBADF;
+    }
+    if (dfs_is_mounted(file->vnode->mnt) != 0)
+    {
+        return -EINVAL;
+    }
+
 #ifdef RT_USING_PAGECACHE
-                if (file->vnode->aspace)
-                {
-                    dfs_aspace_flush(file->vnode->aspace);
-                }
-#endif
-                ret = file->fops->flush(file);
-            }
-            else
-            {
-                ret = -EINVAL;
-            }
+    if (file->vnode->aspace)
+    {
+        ret = dfs_aspace_flush(file->vnode->aspace);
+        if (ret < 0)
+        {
+            return ret;
         }
+    }
+#endif
+
+    if (file->fops->flush)
+    {
+        ret = file->fops->flush(file);
     }
 
     return ret;
@@ -2432,38 +2453,7 @@ int dfs_file_ftruncate(struct dfs_file *file, off_t length)
  */
 int dfs_file_flush(struct dfs_file *file)
 {
-    int ret = 0;
-
-    if (file)
-    {
-        if (file->fops->flush)
-        {
-            if (dfs_is_mounted(file->vnode->mnt) == 0)
-            {
-#ifdef RT_USING_PAGECACHE
-                if (file->vnode->aspace)
-                {
-                    dfs_aspace_flush(file->vnode->aspace);
-                }
-#endif
-                ret = file->fops->flush(file);
-            }
-            else
-            {
-                ret = -EINVAL;
-            }
-        }
-        else
-        {
-            ret = -ENOSYS;
-        }
-    }
-    else
-    {
-        ret = -EBADF;
-    }
-
-    return ret;
+    return dfs_file_fsync(file);
 }
 
 /**

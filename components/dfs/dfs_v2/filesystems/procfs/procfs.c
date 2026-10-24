@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Protect procfs tree and retained entry lifetimes
  */
 
 #include <rthw.h>
@@ -134,6 +135,8 @@ static int dfs_procfs_getdents(struct dfs_file *file, struct dirent *dirp, uint3
             return -EINVAL;
         }
 
+        proc_lock();
+
         dfs_vfs_for_each_subnode(iter, tmp, entry, node)
         {
             if (iter == RT_NULL)
@@ -145,11 +148,11 @@ static int dfs_procfs_getdents(struct dfs_file *file, struct dirent *dirp, uint3
             {
                 d = dirp + index - file->fpos;
 
-                if (S_ISDIR(entry->mode))
+                if (S_ISDIR(iter->mode))
                 {
                     d->d_type = DT_DIR;
                 }
-                else if (S_ISLNK(entry->mode))
+                else if (S_ISLNK(iter->mode))
                 {
                     d->d_type = DT_SYMLINK;
                 }
@@ -171,6 +174,8 @@ static int dfs_procfs_getdents(struct dfs_file *file, struct dirent *dirp, uint3
                 break;
             }
         }
+
+        proc_unlock();
 
         if (ret > 0)
         {
@@ -360,8 +365,10 @@ static struct dfs_vnode *dfs_procfs_lookup(struct dfs_dentry *dentry)
             vnode->data = entry;
             vnode->mnt = dentry->mnt;
         }
-
-        proc_release(entry);
+        else
+        {
+            proc_release(entry);
+        }
     }
 
     PROC_DEBUG(" %s %d >> %s\n", __func__, __LINE__, dentry->pathname);
@@ -376,6 +383,8 @@ static struct dfs_vnode *dfs_procfs_create_vnode(struct dfs_dentry *dentry, int 
 
 static int dfs_procfs_free_vnode(struct dfs_vnode *vnode)
 {
+    proc_release(vnode->data);
+    vnode->data = RT_NULL;
     return 0;
 }
 

@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Protect procfs tree and retained entry lifetimes
  */
 
 #ifndef __PROC_H__
@@ -31,6 +32,8 @@ struct proc_dentry
 {
     rt_uint32_t mode;
     rt_atomic_t ref_count;
+    rt_bool_t linked;   /* Tree owns one reference while linked. */
+    rt_bool_t removed;  /* Protected by the proc tree mutex. */
 
     struct proc_dentry *parent;
     struct dfs_vfs_node node;
@@ -45,6 +48,10 @@ struct proc_dentry
     char *name;
     void *data;
 };
+
+/* Tree operations may sleep. Callbacks must run without this lock. */
+void proc_lock(void);
+void proc_unlock(void);
 
 struct proc_dentry *dfs_proc_find(const char *name);
 

@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Preserve failed writeback and report errors
  * 2023-05-05     RTT          Implement mnt in dfs v2.0
  * 2023-10-23     Shell        fix synchronization of data to icache
  */
@@ -70,6 +71,7 @@ static int dfs_page_inactive(struct dfs_page *page);
 static int dfs_page_remove(struct dfs_page *page);
 static void dfs_page_release(struct dfs_page *page);
 static int dfs_page_dirty(struct dfs_page *page);
+static int dfs_page_writeback(struct dfs_page *page);
 
 static int dfs_aspace_release(struct dfs_aspace *aspace);
 
@@ -315,7 +317,10 @@ static void dfs_pcache_thread(void *parameter)
 
     while (1)
     {
-        if (rt_mq_recv(__pcache.mqueue, &work, sizeof(work), RT_WAITING_FOREVER) == sizeof(work))
+        dfs_file_retry_close();
+
+        if (rt_mq_recv(__pcache.mqueue, &work, sizeof(work),
+                       rt_tick_from_millisecond(100)) == sizeof(work))
         {
             if (work.cmd == PCACHE_MQ_GC)
             {
@@ -363,26 +368,7 @@ static void dfs_pcache_thread(void *parameter)
                         {
                             if (rt_tick_get_millisecond() - page->tick_ms >= 500)
                             {
-                                if (aspace->vnode->size < page->fpos + page->size)
-                                {
-                                    page->len = aspace->vnode->size - page->fpos;
-                                }
-                                else
-                                {
-                                    page->len = page->size;
-                                }
-                                if (aspace->ops->write)
-                                {
-                                    aspace->ops->write(page);
-                                }
-
-                                page->is_dirty = 0;
-
-                                if (page->dirty_node.next != RT_NULL)
-                                {
-                                    rt_list_remove(&page->dirty_node);
-                                    page->dirty_node.next = RT_NULL;
-                                }
+                                dfs_page_writeback(page);
                             }
                         }
                         dfs_page_release(page);
@@ -1064,22 +1050,7 @@ static void dfs_page_release(struct dfs_page *page)
     {
         dfs_page_unmap(page);
 
-        if (page->is_dirty == 1 && aspace->vnode)
-        {
-            if (aspace->vnode->size < page->fpos + page->size)
-            {
-                page->len = aspace->vnode->size - page->fpos;
-            }
-            else
-            {
-                page->len = page->size;
-            }
-            if (aspace->ops->write)
-            {
-                aspace->ops->write(page);
-            }
-            page->is_dirty = 0;
-        }
+        /* Eviction must finish writeback before dropping the cache reference. */
         RT_ASSERT(page->is_dirty == 0);
 
         rt_pages_free(page->page, 0);
@@ -1264,6 +1235,15 @@ static int dfs_page_remove(struct dfs_page *page)
 
     if (rt_atomic_load(&(page->ref_count)) == 1)
     {
+        /* Stop mapped writers before checking the final dirty contents. */
+        dfs_page_unmap(page);
+        ret = dfs_page_writeback(page);
+        if (ret < 0)
+        {
+            dfs_aspace_unlock(aspace);
+            return ret;
+        }
+
         if (page->space_node.next != RT_NULL)
         {
             rt_list_remove(&page->space_node);
@@ -1366,6 +1346,46 @@ static int dfs_page_dirty(struct dfs_page *page)
     }
 
     dfs_aspace_unlock(aspace);
+
+    return 0;
+}
+
+/* Caller holds aspace->lock. A short/failed write leaves the page retryable. */
+static int dfs_page_writeback(struct dfs_page *page)
+{
+    struct dfs_aspace *aspace = page->aspace;
+    ssize_t written;
+    off_t remaining;
+
+    if (!page->is_dirty)
+    {
+        return 0;
+    }
+
+    if (!aspace->vnode || !aspace->ops->write)
+    {
+        return -EIO;
+    }
+
+    remaining = aspace->vnode->size - page->fpos;
+    page->len = remaining <= 0 ? 0 :
+                ((rt_size_t)remaining < page->size ? (rt_size_t)remaining : page->size);
+    written = page->len ? aspace->ops->write(page) : 0;
+    if (written < 0)
+    {
+        return written;
+    }
+    if ((rt_size_t)written != page->len)
+    {
+        return -EIO;
+    }
+
+    page->is_dirty = 0;
+    if (page->dirty_node.next != RT_NULL)
+    {
+        rt_list_remove(&page->dirty_node);
+        page->dirty_node.next = RT_NULL;
+    }
 
     return 0;
 }
@@ -1673,23 +1693,17 @@ int dfs_aspace_write(struct dfs_file *file, const void *buf, size_t count, off_t
                     aspace->vnode->size = *pos;
                 }
 
+                dfs_page_dirty(page);
                 if (file->flags & O_SYNC)
                 {
-                    if (aspace->vnode->size < page->fpos + page->size)
-                    {
-                        page->len = aspace->vnode->size - page->fpos;
-                    }
-                    else
-                    {
-                        page->len = page->size;
-                    }
+                    int error = dfs_page_writeback(page);
 
-                    aspace->ops->write(page);
-                    page->is_dirty = 0;
-                }
-                else
-                {
-                    dfs_page_dirty(page);
+                    if (error < 0)
+                    {
+                        dfs_page_release(page);
+                        dfs_aspace_unlock(aspace);
+                        return error;
+                    }
                 }
 
                 dfs_page_release(page);
@@ -1714,47 +1728,31 @@ int dfs_aspace_write(struct dfs_file *file, const void *buf, size_t count, off_t
  *
  * @param[in] aspace Pointer to the address space containing dirty pages
  *
- * @return Always returns 0 (success)
+ * @return 0 on success, or the first writeback error with dirty data retained.
  */
 int dfs_aspace_flush(struct dfs_aspace *aspace)
 {
+    int ret = 0;
+
     if (aspace)
     {
-        rt_list_t *next;
-        struct dfs_page *page;
+        rt_list_t *next, *tmp;
 
         dfs_aspace_lock(aspace);
-
-        if (aspace->pages_count > 0 && aspace->vnode)
+        rt_list_for_each_safe(next, tmp, &aspace->list_dirty)
         {
-            rt_list_for_each(next, &aspace->list_dirty)
+            struct dfs_page *page = rt_list_entry(next, struct dfs_page, dirty_node);
+
+            ret = dfs_page_writeback(page);
+            if (ret < 0)
             {
-                page = rt_list_entry(next, struct dfs_page, dirty_node);
-                if (page->is_dirty == 1 && aspace->vnode)
-                {
-                    if (aspace->vnode->size < page->fpos + page->size)
-                    {
-                        page->len = aspace->vnode->size - page->fpos;
-                    }
-                    else
-                    {
-                        page->len = page->size;
-                    }
-
-                    if (aspace->ops->write)
-                    {
-                        aspace->ops->write(page);
-                    }
-
-                    page->is_dirty = 0;
-                }
-                RT_ASSERT(page->is_dirty == 0);
+                break;
             }
         }
-
         dfs_aspace_unlock(aspace);
     }
-    return 0;
+
+    return ret;
 }
 
 /**

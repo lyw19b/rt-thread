@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2026-10-23     OpenLANPU    Retain failed final closes for background retry
  * 2005-01-26     Bernard      The first version.
  * 2023-05-05     Bernard      Change to dfs v2.0
  */
@@ -100,6 +101,11 @@ struct dfs_file
     void *mmap_context;         /* used by mmap routine */
 
     void *data;
+
+#ifdef RT_USING_PAGECACHE
+    /* Ownership is transferred here when the final owner cannot close yet. */
+    rt_list_t deferred_close;
+#endif
 };
 #define DFS_FILE_POS(dfs_file) ((dfs_file)->fpos)
 

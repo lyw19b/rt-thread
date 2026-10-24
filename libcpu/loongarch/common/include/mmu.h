@@ -7,6 +7,7 @@
  * Date           Author       Notes
  * 2025-03-10     LoongsonLab  the first version
  * 2025-03-16     LoongsonLab  add and fix page table attributes
+ * 2026-10-23     OpenLANPU    Define read-only Smart user mappings
  */
 
 #ifndef _ASM_MMU_H
@@ -117,6 +118,7 @@ struct mem_desc
 #define MMU_MAP_K_DEVICE   (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_SUC)
 #define MMU_MAP_K_RWCB     (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC)
 #define MMU_MAP_K_RW       (MMU_PAGE_KERN | MMU_PAGE_GLOBAL | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_SUC)
+#define MMU_MAP_U_ROCB     (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_CACHE_CC)
 #define MMU_MAP_U_RWCB     (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC)
 #define MMU_MAP_U_RWCB_XN  (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_CC | MMU_PAGE_NO_EXEC)
 #define MMU_MAP_U_RW       (MMU_PAGE_USER | MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_CACHE_SUC)
