@@ -73,7 +73,10 @@ static int kernel_map_test(int argc, char **argv)
     unsigned int rounds = argc > 1 ? atoi(argv[1]) : 32;
     unsigned int cpu, round, errors = 0;
     volatile rt_uint8_t *dma = (void *)LOONGARCH_PHYS_UNCACHED(mapping_dma);
-    const rt_size_t words = (8UL * 1024 * 1024) / sizeof(rt_ubase_t);
+    /* RT_PAGE_MAX_ORDER is an exclusive limit; the default is 11. */
+    const unsigned int order = RT_PAGE_MAX_ORDER > 11 ? 11 : RT_PAGE_MAX_ORDER - 1;
+    const rt_size_t bytes = ARCH_PAGE_SIZE << order;
+    const rt_size_t words = bytes / sizeof(rt_ubase_t);
     rt_ubase_t *memory = RT_NULL;
     rt_ubase_t *alias = RT_NULL;
 
@@ -151,7 +154,7 @@ static int kernel_map_test(int argc, char **argv)
         errors += dma[round] != (rt_uint8_t)(round ^ 0x5a);
     }
 
-    memory = rt_pages_alloc(11);
+    memory = rt_pages_alloc(order);
     if (!memory)
     {
         errors++;
@@ -204,7 +207,7 @@ static int kernel_map_test(int argc, char **argv)
 done:
     if (memory)
     {
-        rt_pages_free(memory, 11);
+        rt_pages_free(memory, order);
     }
 
     rt_kprintf("KERNEL MAP TEST: %s mode=%s cpus=%u rounds=%u MiB=%u errors=%u\n",
@@ -214,7 +217,7 @@ done:
 #else
                "DMW",
 #endif
-               RT_CPUS_NR, rounds, rounds * 8, errors);
+               RT_CPUS_NR, rounds, (unsigned int)(rounds * bytes / (1024 * 1024)), errors);
     __atomic_store_n(&mapping_busy, 0, __ATOMIC_RELEASE);
     return errors ? -RT_ERROR : RT_EOK;
 }

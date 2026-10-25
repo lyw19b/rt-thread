@@ -89,6 +89,23 @@ if BSP_USING_SDIO
         default n
 endif
 
+menuconfig BSP_USING_USB_HOST
+    bool "LS2K0300 EHCI high-speed USB host and mass storage"
+    default n
+    depends on !RT_USING_CHERRYUSB
+    select RT_USING_MUTEX
+    select RT_USING_SEMAPHORE
+    select RT_USING_MESSAGEQUEUE
+    select RT_USING_TIMER_SOFT
+    select RT_USING_DFS
+    select RT_USING_DFS_ELMFAT
+    help
+        Board-owned EHCI HCD with unchanged CherryUSB core/hub/MSC sources.
+        High-speed USB disks may attach directly or through one high-speed hub.
+        Firmware must supply VBUS, PHY reference clock and release USB reset.
+        OHCI low/full-speed devices, OTG, HID and isochronous are not enabled.
+        DMA uses dedicated uncached physical memory in both DMW and PAGE modes.
+
 source "$(RTT_DIR)/../../driver/rtos/Kconfig"
 
 source "$(RTT_DIR)/../../display/systemui/Kconfig"

@@ -63,6 +63,11 @@ SECTIONS
         __rt_init_end = .;
         . = ALIGN(8);
 
+        . = ALIGN(8);
+        __usbh_class_info_start__ = .;
+        KEEP(*(.usbh_class_info))
+        __usbh_class_info_end__ = .;
+
         __rt_utest_tc_tab_start = .;
         KEEP(*(UtestTcTab))
         __rt_utest_tc_tab_end = .;
@@ -169,6 +174,11 @@ SECTIONS
     {
         *(.sdio_dma)
         . = ALIGN(64);
+    } > SRAM :NONE
+
+    .usb_dma (NOLOAD) : ALIGN(4096)
+    {
+        *(.usb_dma)
         . = ALIGN(4096);
         __dma_end = .;
     } > SRAM :NONE

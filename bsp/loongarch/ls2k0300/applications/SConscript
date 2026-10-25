@@ -11,7 +11,7 @@ if GetDepend('BSP_USING_SELFTEST'):
         src += ['port_tests/loongarch_kernel_map_test.c']
 if GetDepend('BSP_GMAC_USING_ECHO_TEST'):
     src += ['port_tests/ls2k_gmac_echo.c']
-if GetDepend('BSP_SDIO_USING_FILE_TEST'):
+if GetDepend('BSP_SDIO_USING_FILE_TEST') or GetDepend('BSP_USING_USB_HOST'):
     src += ['port_tests/ls2k_sd_filetest.c']
 group = DefineGroup('Applications', src, depend=[''])
 Return('group')

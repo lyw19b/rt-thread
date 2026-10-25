@@ -14,7 +14,7 @@
  *   Writes, synchronizes, closes, reopens and verifies a user-selected test file.
  *
  * Notes:
- *   Run on a mounted SD filesystem. O_EXCL prevents overwriting existing data.
+ *   Run on a mounted SD or USB filesystem. O_EXCL prevents overwriting existing data.
  *   Successful tests remove their file; failures retain it for examination.
  *   Readback can use the filesystem cache; reboot/readback and card removal
  *   testing are separate hardware acceptance steps.
@@ -42,7 +42,7 @@ static int sd_filetest(int argc, char **argv)
 
     if (argc < 2 || argc > 3)
     {
-        rt_kprintf("usage: sd_filetest /sd/new-test-file [MiB:1..256]\n");
+        rt_kprintf("usage: %s /mount/new-test-file [MiB:1..256]\n", argv[0]);
         return -1;
     }
 
@@ -143,7 +143,11 @@ out:
     }
 
     rt_free(buffer);
-    rt_kprintf("sd_filetest %s: %u MiB\n", result ? "FAIL" : "PASS", mib);
+    rt_kprintf("%s %s: %u MiB\n", argv[0], result ? "FAIL" : "PASS", mib);
     return result;
 }
 MSH_CMD_EXPORT(sd_filetest, Verify a new file on the mounted SD card);
+
+#ifdef BSP_USING_USB_HOST
+MSH_CMD_EXPORT_ALIAS(sd_filetest, usb_filetest, Verify a new file on a mounted USB disk);
+#endif
