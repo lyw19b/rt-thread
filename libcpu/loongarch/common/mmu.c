@@ -270,6 +270,100 @@ static rt_bool_t ale_user_permission(rt_ubase_t attr, rt_bool_t write,
 }
 
 /**
+ * @brief Copy or fill an exact user RAM range without restoring adjacent bytes.
+ * @note The address-space lock pins mappings, not user threads. Consequently a
+ *       temporary whole-page snapshot must never be written back here. Resolve
+ *       demand paging and CoW through the normal fault path before each write.
+ */
+rt_size_t loongarch_user_write(rt_aspace_t aspace, void *destination,
+                               const void *source, rt_size_t size, int fill)
+{
+    rt_ubase_t address = (rt_ubase_t)destination;
+    const rt_uint8_t *input = source;
+    rt_size_t completed = 0;
+
+    if (!aspace || !size || (fill < 0 && !source) ||
+        address < USER_VADDR_START || address >= USER_VADDR_TOP ||
+        size > USER_VADDR_TOP - address)
+    {
+        return 0;
+    }
+
+    if (rt_mutex_take(&aspace->bst_lock, RT_WAITING_FOREVER) != RT_EOK)
+    {
+        return 0;
+    }
+
+    while (completed < size)
+    {
+        rt_ubase_t cursor = address + completed;
+        rt_varea_t varea = rt_aspace_query(aspace, (void *)cursor);
+        rt_ubase_t *pte;
+        rt_size_t chunk = ARCH_PAGE_SIZE - (cursor & ARCH_PAGE_MASK);
+        rt_uint8_t *alias;
+        struct rt_aspace_fault_msg fault = {
+            .fault_vaddr = (void *)cursor,
+            .fault_type = MM_FAULT_TYPE_GENERIC_MMU,
+            .fault_op = MM_FAULT_OP_WRITE,
+        };
+
+        if (chunk > size - completed)
+        {
+            chunk = size - completed;
+        }
+
+        /* Generic byte copies are RAM operations, not an MMIO access API. */
+        if (!varea || !ale_user_permission(varea->attr, RT_TRUE, RT_FALSE) ||
+            (varea->attr & (3UL << MMU_CACHE_SHIFT)) != MMU_CACHE_CC)
+        {
+            break;
+        }
+
+        pte = walk(aspace, cursor, RT_FALSE);
+
+        if (!pte || ((*pte & (MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_PAGE_DIRTY)) !=
+                      (MMU_PAGE_VALID | MMU_PAGE_WRITE | MMU_PAGE_DIRTY)))
+        {
+            if (!rt_aspace_fault_try_fix(aspace, &fault))
+            {
+                break;
+            }
+
+            pte = walk(aspace, cursor, RT_FALSE);
+        }
+
+        if (!pte || !ale_user_permission(*pte, RT_TRUE, RT_FALSE) ||
+            ((*pte & (MMU_PAGE_VALID | MMU_PAGE_DIRTY)) !=
+             (MMU_PAGE_VALID | MMU_PAGE_DIRTY)) ||
+            (*pte & (3UL << MMU_CACHE_SHIFT)) != MMU_CACHE_CC)
+        {
+            break;
+        }
+
+        alias = rt_kmem_p2v((void *)((*pte & ARCH_PAGE_ADDRESS_MASK) |
+                                     (cursor & ARCH_PAGE_MASK)));
+        if (!alias)
+        {
+            break;
+        }
+
+        if (fill >= 0)
+        {
+            rt_memset(alias, fill, chunk);
+        }
+        else
+        {
+            rt_memcpy(alias, input + completed, chunk);
+        }
+
+        completed += chunk;
+    }
+
+    rt_mutex_release(&aspace->bst_lock);
+    return completed;
+}
+
+/**
  * @brief Copy up to eight user bytes for scalar ALE recovery, without faulting.
  * @note Called with scheduling available and IRQs enabled. The address-space
  *       mutex pins both mappings until the complete copy finishes. Both pages

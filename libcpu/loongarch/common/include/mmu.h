@@ -37,6 +37,11 @@ struct mem_desc
 
 #define ARCH_MAP_FAILED ((void *)-1)
 
+/* Write only the requested user bytes. fill < 0 copies source; otherwise fill
+ * supplies a byte value. Returns the completed prefix if a later page fails. */
+rt_size_t loongarch_user_write(rt_aspace_t aspace, void *destination,
+                               const void *source, rt_size_t size, int fill);
+
 
 #define PAGE_OFFSET_BIT  12
 #define ARCH_PAGE_SHIFT  PAGE_OFFSET_BIT

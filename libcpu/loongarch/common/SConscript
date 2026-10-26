@@ -10,8 +10,17 @@ src     = Glob('*.c') + Glob('*.cpp') + Glob('*_gcc.S')
 CPPPATH = [cwd, cwd + '/include']
 
 if not GetDepend('RT_USING_SMART'):
-    SrcRemove(src, ['mmu.c'])
+    SrcRemove(src, ['mmu.c', 'usercopy.c'])
 
-group = DefineGroup('libcpu', src, depend = [''], CPPPATH = CPPPATH)
+linkflags = []
+if GetDepend('RT_USING_SMART'):
+    # Partial-page copyback in the generic LWP helpers can overwrite another
+    # CPU's unrelated user writes. Keep the bounded implementation local to
+    # LoongArch; wrap all entry points, including same-object helper callers.
+    for symbol in ('lwp_put_to_user', 'lwp_data_put', 'lwp_data_set', 'lwp_memcpy'):
+        linkflags.append('-Wl,--wrap=' + symbol)
+
+group = DefineGroup('libcpu', src, depend = [''], CPPPATH = CPPPATH,
+                    LINKFLAGS = ' ' + ' '.join(linkflags))
 
 Return('group')
