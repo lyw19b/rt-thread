@@ -34,4 +34,42 @@ if GetDepend('BSP_USING_XINGYUN_TOUCH'):
     group += DefineGroup('XingyunTouch', ['xingyun_touch/gt911.c'],
                          depend=['BSP_USING_XINGYUN_TOUCH'], CPPPATH=paths)
 
+if GetDepend('BSP_USING_USB_HOST'):
+    shared = os.path.abspath(os.path.join(cwd, '..', '..', 'ls2k0300', 'drivers'))
+    usb = os.path.join(rtconfig.RTT_ROOT, 'components/drivers/usb/cherryusb')
+    paths = [cwd, shared] + [os.path.join(usb, part) for part in
+                            ('common', 'core', 'class/hub', 'class/msc')]
+    VariantDir('xingyun_usb', shared, duplicate=0)
+    sources = ['drv_usb.c', 'drv_usb_msc.c', 'drv_usb_osal.c',
+               'ls2k_ehci.c', 'ls2k_usb_bot.c']
+
+    if GetDepend('BSP_USING_USB_CAMERA'):
+        sources += ['ls2k_ehci_iso.c']
+
+    group += DefineGroup('Xingyun USB host',
+                         ['xingyun_usb/' + name for name in sources],
+                         depend=['BSP_USING_USB_HOST'], CPPPATH=paths,
+                         LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror',
+                                        '-Wno-ignored-qualifiers'],
+                         LOCAL_CPPDEFINES=['LS2K_EHCI_CAMERA']
+                         if GetDepend('BSP_USING_USB_CAMERA') else [])
+    group += DefineGroup('Xingyun USB stack',
+                         [os.path.join(usb, name) for name in
+                          ('core/usbh_core.c', 'class/hub/usbh_hub.c',
+                           'class/msc/usbh_msc.c')],
+                         depend=['BSP_USING_USB_HOST'], CPPPATH=paths)
+    group += DefineGroup('Xingyun USB OSAL',
+                         [os.path.join(usb, 'osal/usb_osal_rtthread.c')],
+                         depend=['BSP_USING_USB_HOST'], CPPPATH=paths,
+                         LOCAL_CPPDEFINES=[
+                             ('usb_osal_enter_critical_section', 'ls2k_usb_local_irq_enter'),
+                             ('usb_osal_leave_critical_section', 'ls2k_usb_local_irq_leave'),
+                             ('usb_osal_timer_create', 'ls2k_usb_raw_tick_timer_create')])
+
+    if GetDepend('BSP_USING_USB_CAMERA'):
+        camera = os.path.abspath(os.path.join(rtconfig.RTT_ROOT, '..', '..',
+                                              'driver', 'rtos', 'camera'))
+        group += SConscript(os.path.join(camera, 'SConscript'),
+                           variant_dir='camera', duplicate=0)
+
 Return('group')

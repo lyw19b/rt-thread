@@ -10,6 +10,6 @@ if GetDepend('BSP_USING_SELFTEST'):
     src += ['port_tests/loongarch_ale_test.c']
     src += ['port_tests/loongarch_kernel_test.c', 'port_tests/loongarch_smp_test.c']
 if GetDepend('BSP_GMAC_USING_ECHO_TEST'):
-    src += ['port_tests/ls2k_gmac_echo.c']
+    src += ['port_tests/ls2k_gmac_echo.c', 'port_tests/ls2k_tcp_echo.c']
 group = DefineGroup('Applications', src, depend=[''])
 Return('group')

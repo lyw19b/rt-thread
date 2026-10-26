@@ -91,7 +91,7 @@ python3 examples/test/ls2k_gmac_test.py --peer 192.168.1.20 --frames 10000 --win
 
 2026-10-14，使用 GCC 15.2.0 完成上述六种配置的交叉构建，无编译告警；宿主测试在 AddressSanitizer/UndefinedBehaviorSanitizer 下通过，两端口模型各完成 100,000 帧校验。UDP 校验客户端另通过本机回显 10,000 帧测试，该结果不代表板卡收发性能。
 
-当前尚未进行实板收发验证。现有主线 LoongArch QEMU 只有 `virt` 机型，不能代替 LS2K1000LA GMAC 验证。AHCI 可选驱动沿用上一阶段迁入版本，不属于此次网络重构范围。
+上述 2026-10-14 结果仅为模型和构建验证；2026-10-26 的实板收发结果见下文。AHCI 可选驱动沿用上一阶段迁入版本，不属于此次网络重构范围。
 
 ## 星云板首次实测（2026-10-26）
 
@@ -200,3 +200,128 @@ python3 examples/test/ls2k_gmac_test.py --build --bsp ls2k0300 --output /tmp/ls2
 2K0300 构建矩阵覆盖五种基础/网络组合、关闭 SMP 的标准版，以及 Nano、Smart、UART9 和 Smart 双网口，共十种。寄存器模型检查时钟计算、中断路由/确认/屏蔽、串口 DLAB 互斥和 DMA 通路；模型不能验证电气时序。现有 QEMU `virt` 不模拟 2K0300 外设，实板启动、串口时钟、PHY 协商与持续收发仍需硬件验收。当前没有板级复位/关机实现，使用板上复位键或引导固件。
 
 本次验证（2026-10-14）：2K1000LA 六种配置、2K0300 十种配置交叉构建通过，包含 SMP 和关闭 SMP 的标准版。共用驱动的宿主测试在 ASan/UBSan 下通过，两个 GMAC 模型各校验 100,000 帧；两种芯片的串口模型各执行 100,000 次轮询收发。QEMU 的多核内核、用户态和压力测试记录见 `bsp/qemu-virt64-loongarch/README.md`。这些结果不能代替两款芯片的固件交接、次核启动和网络实板验收。
+
+
+## 星云板 Smart 网络与 USB 实测入口（2026-10-26）
+
+项目根目录执行 `system/driver/tests/rtos/build_xingyun_kernel.py`，在原有
+`--cpus 2 --application ELF` 参数上增加 `--network --camera`，可构建同时
+包含 NovaUIOS、双 GMAC 和 UVC 的隔离镜像。保持双核；加载脚本在进入
+RT-Thread 前执行 U-Boot `usb stop`，避免固件 USB DMA 继续访问内存。
+
+网络修正均在 LoongArch BSP 和板级配置中：
+
+- 系统工作队列栈由 2048 增至 8192 字节。原镜像实测溢出，修正后网络
+  压力期间峰值约 26%，未再出现该溢出。
+- 对已识别的 YT8511（PHY ID `0000:010a`），清除扩展寄存器 `0x27`
+  的自动休眠位 15，并有界等待休眠状态位 5 清零；保留 RGMII 延迟和
+  时钟输出设置，恢复 MDIO 扩展寄存器选择。仅设置 PLL 保持位的版本
+  在未接线的 e1 上仍然超时，不能作为修复。关闭自动休眠后两口初始化
+  均成功。位定义来自 [YT8511C/H 数据手册](https://atta.szlcsc.com/upload/public/pdf/source/20240105/D2398836F2709CC9BC3B5FCE6170D0BE.pdf)。
+- 移除初始 `ETHIF_LINK_PHYUP` 标志，由 PHY 轮询发布真实链路变化；该
+  标志原先错误地把未接线端口报告为 LINK_UP。
+- BSP `lwipopts.h` 包含公共配置后覆盖 UDP 邮箱 64、接收字节预算
+  128 KiB、NETBUF/INPKT 池各 128。仅增大邮箱而保留 8192 字节预算的
+  版本仍丢包。网络测试配置同时使用 128 描述符的 DMA 环。
+
+第一轮网络镜像实测：e0 协商 1000 Mbps 全双工并通过 DHCP 获取地址；
+主机发起 1472 字节 ping 及板端普通 ping 均零丢包。窗口 16 的 10000
+包 UDP 全部回显且内容一致，耗时 1.567 秒；TCP 双向各 64 MiB 逐字节
+校验通过，耗时 9.328 秒。两项测试前后网卡错误计数没有增加，静止界面
+下堆占用均为 27803856 字节。窗口 32 的进一步压力在 15104 包内丢失
+一个回显；该失败已保留，不能用首轮通过结果代替更高压力验证。
+
+保留的实板测试脚本位于项目 `system/driver/tests/rtos/`：
+
+- `test_xingyun_network.py`：双向 ping、变长 UDP 序号与内容校验、网卡
+  计数、线程栈、堆及 UI 状态；同时记录宿主 UDP 统计。
+- `test_xingyun_tcp.py`：固定 64 KiB 块、部分收发处理、双向大容量流校验。
+- `test_xingyun_camera.py`：枚举、模式、完整帧、连续采集与重复启停检查。
+
+USB 使用星云板 PCI `00:04.1` 固件 BAR 和 IRQ 50，复用 2K0300 BSP
+已有的 EHCI/UVC 传输实现，不修改 RT-Thread 公共 USB 栈。控制器有
+三个硬件根端口，当前适配明确只暴露端口 1；其余根端口、OHCI、OTG
+尚未实现。摄像头实物为 Sonix `0c45:636b`，UVC 1.0，高速 480 Mbps。
+
+实板发现 U-Boot `usb stop` 将伴随 OHCI 留在 Suspend（HcControl
+`0xc0`），此时 EHCI 即使运行且端口供电也检测不到连接。仅修改端口
+供电无效；板级初始化检查 PCI `00:04.2` 后屏蔽 OHCI 中断、关闭所有
+DMA 列表并置 USB Reset，随后 EHCI 可检测并枚举摄像头。该操作用于
+控制器交接，不代表实现了 OHCI 的低速/全速传输。
+
+项目 UVC 驱动对 1.0 设备使用固定 26 字节 Probe/Commit 控制块，避免
+依赖此摄像头不兼容的 GET_LEN 响应；仍检查 GET_CUR 的完整长度、
+格式、间隔和缓冲区边界。双核无界面诊断镜像实测 YUYV 640×480
+三轮、每轮 10 秒共取得 855 帧，约 28.5 帧/秒；每轮丢弃 1 帧，负载
+格式、传输和溢出错误均为零，测试前后堆占用同为 118992 字节。
+这些结果尚不代表与 NovaUIOS 同时运行的验证。
+
+MJPEG 首轮 800×600 有大量丢弃，诊断发现有效 JPEG 的 `FFD9` 后带
+零填充；原先要求最后两个传输字节为 `FFD9`，会误拒绝这些帧。
+已经保留修正及回归用例，拒绝非零尾部、缺失 EOI 和带传输错误的帧。
+修正后的 MJPEG 800×600 实板三轮 10 秒取得 855 帧，随后四轮 30 秒
+取得 3540 帧（平均 29.5 帧/秒）；每轮丢弃 1 帧，负载格式、传输和
+溢出错误均为零，堆占用前后保持 118992 字节。
+另经串口导出一张 39088 字节实拍 JPEG，长度和 FNV 校验一致，宿主
+完整解码得到 800×600 图像。导出脚本为
+`system/driver/tests/rtos/export_xingyun_camera_frame.py`；实拍文件留在
+本机临时目录，测试记录中不包含照片内容。
+
+网络进一步诊断曾复现回显尾部 7 字节变化、UDP 校验错误，以及接收
+缺包和应用内容不一致；发送前校验与 DMA 回收哈希计数为零也不能
+排除接收路径问题。随后发现本板 CFG0（物理地址 `0x1fe00420`）的
+`gmac_coherence_en` 位 0 仍为 1，与驱动使用的 SUC 非缓存缓冲区
+访问方式不一致。板级初始化在 MAC 启动前仅清除此位，保留其他位，
+加入屏障和读回检查；实板值由 `00003d09` 变为 `00003d08`。
+
+修正后双核 NovaUIOS 镜像在主页运行，UDP 窗口 32、100000 包全部
+逐字节回显校验通过，耗时 73.933 秒；无丢包、重复或内容损坏，RX/TX
+校验、内容、回收及 pbuf 丢弃计数均为零。诊断代码有额外开销，此结果
+不代表关闭诊断后的性能或长期稳定性；堆占用由 27823568 增至
+27824336 字节，不能声称完全不变。板级寄存器宿主模型覆盖保留位、
+重复初始化、两个端口及失败路径，但不能模拟真实总线时序。
+相关成功和失败记录均保存在项目
+`system/docs/rthread/bugs/tests/results/20261026-xingyun-physical/`。
+
+
+### 星云板持久安装与自动启动
+
+2026-10-26 已按用户要求用双核 RT-Thread Smart + NovaUIOS 镜像替换
+SATA `scsi 0:1 /boot/uImage`，没有保留原 Starry 系统镜像副本。
+U-Boot 本身、分区表及板级数据保留。安装镜像大小 3529572 字节，
+CRC32 `818587cb`；写入后重新读取，长度、CRC32 和 uImage 内部校验
+全部通过。内核以 gzip 打包，加载和入口物理地址为 `0x98000000`。
+uImage 使用 vendor `bootm start` / `bootm loados` 解压路径，其头部
+Linux 类型仅用于兼容固件镜像处理，实际负载是 RT-Thread Smart。
+
+这版 U-Boot 使用 simple parser，不支持 `if/then` 或 `&&`。最初使用
+条件语法导致复位停留在 U-Boot；已改为以下环境变量，并验证保存后
+自动执行。`run` 依次执行变量，某一步返回错误即停止后续启动步骤。
+
+```text
+bootcmd=run novaui_boot
+novaui_console=setenv stdin serial; setenv stdout serial; setenv stderr serial
+novaui_scan=scsi reset
+novaui_load=ext4load scsi 0:1 9000000090000000 /boot/uImage
+novaui_check=iminfo 9000000090000000
+novaui_prepare=bootm start 9000000090000000
+novaui_unpack=bootm loados
+novaui_stop=usb stop
+novaui_go=go 9000000098000000
+novaui_boot=run novaui_console novaui_scan novaui_load novaui_check novaui_prepare novaui_unpack novaui_stop novaui_go
+```
+
+持久化 stdout/stderr 保留 `serial,vidconsole,vidconsole1`，供固件初始化
+显示；启动链随后重定向到串口并停止固件 USB，再进入内核。长命令通过
+串口分段发送，避免显示回显较慢时 UART FIFO 丢字节；保存前逐项读回
+比对。安装脚本 `system/driver/tests/rtos/install_xingyun_boot.py` 默认
+只检查，指定 `--write` 才覆盖选定镜像并保存环境；它要求已有双核 RAM
+启动通过记录、原环境备份、目标文件的长度和 CRC，避免误选目标。
+
+`system/driver/tests/rtos/test_xingyun_autoboot.py` 实测从 U-Boot 执行
+复位，全程不重新上传镜像、不截断自动启动，约 79.51 秒出现
+`NOVAUI READY`。日志确认从 SATA 读取镜像、两核上线、界面 active=1
+且 errors=0；随后打开智能相机，5 秒检查时累计收到 127 帧，启动阶段
+丢弃 1 帧。此结果验证了复位自动启动，尚未验证安装后的完全断电启动。
+安装校验、旧脚本失败和修复后的完整记录位于项目测试结果目录的
+`20261026-xingyun-physical/installation/`。

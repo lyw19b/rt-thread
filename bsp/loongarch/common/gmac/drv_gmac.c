@@ -22,6 +22,18 @@ struct gmac_dma_memory
     rt_uint8_t rx_buffers[BSP_GMAC_RING_SIZE][GMAC_BUFFER_SIZE];
 };
 
+#ifdef BSP_GMAC_USING_ECHO_TEST
+#define GMAC_TRACE_TAIL_SIZE 64U
+
+struct gmac_tx_trace
+{
+    rt_uint32_t hash;
+    rt_uint16_t length;
+    rt_uint64_t sequence;
+    rt_uint8_t tail[GMAC_TRACE_TAIL_SIZE];
+};
+#endif
+
 struct gmac_device
 {
     struct eth_device parent;
@@ -35,6 +47,16 @@ struct gmac_device
     rt_bool_t fault, recovering;
     rt_bool_t initialized, registered;
     rt_uint32_t bus_errors, rx_dropped, recoveries;
+#ifdef BSP_GMAC_USING_ECHO_TEST
+    rt_uint32_t tx_checksum_errors;
+    rt_uint32_t tx_reclaim_errors;
+    rt_uint32_t tx_payload_errors;
+    rt_uint32_t rx_checksum_errors;
+    rt_uint32_t rx_payload_errors;
+    rt_uint32_t rx_udp_packets;
+    rt_uint32_t rx_udp_pbuf_drops;
+    struct gmac_tx_trace tx_trace[BSP_GMAC_RING_SIZE];
+#endif
 };
 
 /* This NOLOAD section is outside .bss and the heap. Only the uncached alias
@@ -214,6 +236,237 @@ static rt_err_t _control(rt_device_t device, int command, void *argument)
     return RT_EOK;
 }
 
+#ifdef BSP_GMAC_USING_ECHO_TEST
+static rt_uint32_t _tx_hash(const rt_uint8_t *frame, rt_size_t length)
+{
+    const volatile rt_uint8_t *data = frame;
+    rt_uint32_t hash = 2166136261U;
+
+    for (rt_size_t i = 0; i < length; i++)
+    {
+        hash = (hash ^ data[i]) * 16777619U;
+    }
+
+    return hash;
+}
+
+static void _trace_tx_submit(struct gmac_device *dev, const rt_uint8_t *frame,
+                             rt_size_t length)
+{
+    struct gmac_tx_trace *trace = &dev->tx_trace[dev->mac.tx_head];
+    rt_size_t tail_length = length < GMAC_TRACE_TAIL_SIZE ? length : GMAC_TRACE_TAIL_SIZE;
+    rt_size_t header;
+
+    /* Drain the copy before sampling its uncached DMA alias. */
+    _dma_barrier(dev);
+    trace->length = length;
+    trace->hash = _tx_hash(frame, length);
+    trace->sequence = UINT64_MAX;
+    rt_memcpy(trace->tail, frame + length - tail_length, tail_length);
+
+    if (length < 50 || frame[12] != 8 || frame[13] != 0 || frame[23] != 17)
+    {
+        return;
+    }
+
+    header = (frame[14] & 15) * 4;
+
+    if (header < 20 || length < 14 + header + 16 ||
+        frame[14 + header] != 0x23 || frame[15 + header] != 0x28)
+    {
+        return;
+    }
+
+    trace->sequence = 0;
+
+    for (unsigned int i = 0; i < 8; i++)
+    {
+        trace->sequence = (trace->sequence << 8) | frame[22 + header + i];
+    }
+}
+
+static void _trace_tail(const char *label, const rt_uint8_t *bytes, rt_size_t length)
+{
+    rt_kprintf("%s", label);
+
+    for (rt_size_t i = 0; i < length; i++)
+    {
+        rt_kprintf(" %02x", bytes[i]);
+    }
+
+    rt_kprintf("\n");
+}
+
+static void _trace_tx_complete(struct ls2k_gmac *mac, unsigned int slot, size_t length)
+{
+    struct gmac_device *dev = mac->context;
+    struct gmac_tx_trace *trace = &dev->tx_trace[slot];
+    const rt_uint8_t *frame = mac->tx.buffers + slot * GMAC_BUFFER_SIZE;
+    rt_size_t original_length = trace->length;
+    rt_uint32_t hash;
+
+    if (!original_length || original_length > GMAC_FRAME_MAX)
+    {
+        return;
+    }
+
+    hash = _tx_hash(frame, original_length);
+
+    if (hash != trace->hash || length != original_length)
+    {
+        dev->tx_reclaim_errors++;
+
+        if (dev->tx_reclaim_errors <= 3)
+        {
+            rt_size_t tail_length = original_length < GMAC_TRACE_TAIL_SIZE ?
+                                    original_length : GMAC_TRACE_TAIL_SIZE;
+
+            rt_kprintf("%s: TX changed after submit slot=%u dma=%08x seq=%llu "
+                       "len=%u/%u hash=%08x/%08x status=%08x\n",
+                       dev->name, slot, mac->tx.buffers_dma + slot * GMAC_BUFFER_SIZE,
+                       trace->sequence, (unsigned int)original_length,
+                       (unsigned int)length, trace->hash, hash, mac->tx.desc[slot].status);
+            _trace_tail("TX tail before:", trace->tail, tail_length);
+            _trace_tail("TX tail after :", frame + original_length - tail_length, tail_length);
+        }
+    }
+
+    trace->length = 0;
+}
+
+/* Inspect DMA bytes without changing delivery. The echo pattern check is
+ * essential: a changed 64-byte line can preserve the 16-bit UDP checksum. */
+static rt_bool_t _check_udp_frame(struct gmac_device *dev, const rt_uint8_t *frame,
+                                  rt_size_t bytes, rt_bool_t transmit)
+{
+    const rt_uint8_t *ip, *udp;
+    unsigned int header, length, sum = 0;
+    rt_bool_t echo;
+
+    if (bytes < 42 || frame[12] != 8 || frame[13] != 0)
+    {
+        return RT_FALSE;
+    }
+
+    ip = frame + 14;
+    header = (ip[0] & 15) * 4;
+
+    if ((ip[0] >> 4) != 4 || header < 20 || bytes < 14 + header + 8 ||
+        ip[9] != 17 || (ip[6] & 0x3f) || ip[7])
+    {
+        return RT_FALSE;
+    }
+
+    udp = ip + header;
+    length = ((unsigned int)udp[4] << 8) | udp[5];
+
+    if (length < 8 || length > bytes - 14 - header)
+    {
+        return RT_FALSE;
+    }
+
+    echo = length >= 16 && udp[transmit ? 0 : 2] == 0x23 &&
+           udp[transmit ? 1 : 3] == 0x28;
+
+    if (echo && !transmit)
+    {
+        dev->rx_udp_packets++;
+    }
+
+    if (udp[6] | udp[7])
+    {
+        for (unsigned int i = 12; i < 20; i += 2)
+        {
+            sum += ((unsigned int)ip[i] << 8) | ip[i + 1];
+        }
+
+        sum += 17 + length;
+
+        for (unsigned int i = 0; i < length; i += 2)
+        {
+            sum += (unsigned int)udp[i] << 8;
+
+            if (i + 1 < length)
+            {
+                sum += udp[i + 1];
+            }
+        }
+
+        while (sum >> 16)
+        {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+
+        if (sum != 0xffff)
+        {
+            rt_uint32_t *errors = transmit ? &dev->tx_checksum_errors :
+                                            &dev->rx_checksum_errors;
+
+            (*errors)++;
+
+            if (*errors <= 3)
+            {
+                rt_kprintf("%s: %s UDP checksum invalid at DMA len=%u sum=%04x "
+                           "header=%02x%02x\n", dev->name, transmit ? "TX" : "RX",
+                           length, sum, udp[6], udp[7]);
+            }
+        }
+    }
+
+    if (echo)
+    {
+        rt_uint64_t sequence = 0;
+        unsigned int expected_length, first = 0;
+        rt_uint8_t expected = 0;
+        rt_bool_t mismatch;
+
+        for (unsigned int i = 0; i < 8; i++)
+        {
+            sequence = (sequence << 8) | udp[8 + i];
+        }
+
+        expected_length = 24 + sequence % 1457;
+        mismatch = length != expected_length;
+
+        for (unsigned int i = 16; !mismatch && i < length; i++)
+        {
+            expected = (rt_uint8_t)(sequence + (i - 16) * 17);
+
+            if (udp[i] != expected)
+            {
+                first = i;
+                mismatch = RT_TRUE;
+            }
+        }
+
+        if (mismatch)
+        {
+            rt_uint32_t *errors = transmit ? &dev->tx_payload_errors :
+                                            &dev->rx_payload_errors;
+            unsigned int slot = transmit ? dev->mac.tx_head : dev->mac.rx_head;
+            rt_uint32_t base = transmit ? dev->mac.tx.buffers_dma : dev->mac.rx.buffers_dma;
+
+            (*errors)++;
+
+            if (*errors <= 3)
+            {
+                rt_size_t tail_length = bytes < GMAC_TRACE_TAIL_SIZE ? bytes : GMAC_TRACE_TAIL_SIZE;
+
+                rt_kprintf("%s: %s UDP pattern invalid slot=%u dma=%08x seq=%llu "
+                           "len=%u expected_len=%u first_frame_byte=%u actual=%02x "
+                           "expected=%02x\n", dev->name, transmit ? "TX" : "RX", slot,
+                           base + slot * GMAC_BUFFER_SIZE, sequence, length,
+                           expected_length, first ? 14 + header + first : 0,
+                           first ? udp[first] : 0, expected);
+                _trace_tail("DMA frame tail:", frame + bytes - tail_length, tail_length);
+            }
+        }
+    }
+
+    return echo;
+}
+#endif
+
 static rt_err_t _transmit(rt_device_t device, struct pbuf *packet)
 {
     struct gmac_device *dev = (struct gmac_device *)device;
@@ -246,7 +499,13 @@ static rt_err_t _transmit(rt_device_t device, struct pbuf *packet)
     if (pbuf_copy_partial(packet, buffer, length, ETH_PAD_SIZE) != length)
         error = -RT_ERROR;
     else
+    {
+#ifdef BSP_GMAC_USING_ECHO_TEST
+        _check_udp_frame(dev, buffer, length, RT_TRUE);
+        _trace_tx_submit(dev, buffer, length);
+#endif
         error = ls2k_gmac_submit_tx(&dev->mac, length);
+    }
     rt_mutex_release(&dev->lock);
     return error ? -RT_ERROR : RT_EOK;
 }
@@ -268,6 +527,9 @@ static struct pbuf *_receive(rt_device_t device)
             break;
         if (length > 0)
         {
+#ifdef BSP_GMAC_USING_ECHO_TEST
+            rt_bool_t echo = _check_udp_frame(dev, data, length, RT_FALSE);
+#endif
             packet = pbuf_alloc(PBUF_RAW, length + ETH_PAD_SIZE, PBUF_POOL);
 #if ETH_PAD_SIZE
             if (packet) pbuf_header(packet, -ETH_PAD_SIZE);
@@ -283,7 +545,15 @@ static struct pbuf *_receive(rt_device_t device)
             if (packet)
                 dev->mac.rx_packets++;
             else
+            {
                 dev->rx_dropped++;
+#ifdef BSP_GMAC_USING_ECHO_TEST
+                if (echo)
+                {
+                    dev->rx_udp_pbuf_drops++;
+                }
+#endif
+            }
         }
         ls2k_gmac_release_rx(&dev->mac);
         if (packet)
@@ -384,6 +654,9 @@ static int _register_port(struct gmac_device *dev, struct gmac_dma_memory *stora
     dev->mac.io = &gmac_io;
     dev->mac.context = dev;
     dev->mac.mdio_clock = BSP_GMAC_MDIO_CLOCK;
+#ifdef BSP_GMAC_USING_ECHO_TEST
+    dev->mac.tx_complete = _trace_tx_complete;
+#endif
     dev->mac.tx = (struct ls2k_gmac_ring){dma->tx, &dma->tx_buffers[0][0],
         LS2K_PHYSICAL(dma->tx), LS2K_PHYSICAL(dma->tx_buffers), BSP_GMAC_RING_SIZE};
     dev->mac.rx = (struct ls2k_gmac_ring){dma->rx, &dma->rx_buffers[0][0],
@@ -393,9 +666,10 @@ static int _register_port(struct gmac_device *dev, struct gmac_dma_memory *stora
     dev->parent.parent.ops = &device_ops;
     dev->parent.eth_rx = _receive;
     dev->parent.eth_tx = _transmit;
-    /* PHYUP prevents ethernetif from asserting link before the PHY is ready. */
+    /* Start link-down. The service thread publishes the measured PHY state;
+     * ETHIF_LINK_PHYUP would assert a link even on an unplugged port. */
     error = eth_device_init_with_flag(&dev->parent, dev->name,
-             NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | ETHIF_LINK_PHYUP
+             NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP
 #if LWIP_IGMP
              | NETIF_FLAG_IGMP
 #endif
@@ -435,6 +709,14 @@ static void _show_status(struct gmac_device *dev)
                dev->name, dev->mac.phy, dev->mac.link, dev->mac.speed, dev->mac.duplex,
                dev->mac.tx_packets, dev->mac.rx_packets, dev->mac.tx_errors,
                dev->mac.rx_errors, dev->rx_dropped, __atomic_load_n(&dev->bus_errors, __ATOMIC_RELAXED), dev->recoveries);
+#ifdef BSP_GMAC_USING_ECHO_TEST
+    rt_kprintf("%s tx_checksum_errors=%u tx_reclaim_errors=%u\n",
+               dev->name, dev->tx_checksum_errors, dev->tx_reclaim_errors);
+    rt_kprintf("%s tx_payload_errors=%u rx_udp_packets=%u rx_checksum_errors=%u "
+               "rx_payload_errors=%u rx_udp_pbuf_drops=%u\n", dev->name,
+               dev->tx_payload_errors, dev->rx_udp_packets, dev->rx_checksum_errors,
+               dev->rx_payload_errors, dev->rx_udp_pbuf_drops);
+#endif
     rt_mutex_release(&dev->lock);
 }
 

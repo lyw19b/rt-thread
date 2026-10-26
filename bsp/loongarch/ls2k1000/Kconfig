@@ -60,3 +60,28 @@ config BSP_USING_XINGYUN_TOUCH
     select RT_USING_I2C
     select RT_USING_TOUCH
     default n
+
+menuconfig BSP_USING_USB_HOST
+    bool "Xingyun EHCI high-speed USB host (root port 1)"
+    default n
+    depends on !RT_USING_CHERRYUSB
+    select RT_USING_MUTEX
+    select RT_USING_SEMAPHORE
+    select RT_USING_MESSAGEQUEUE
+    select RT_USING_TIMER_SOFT
+    select RT_USING_DFS
+    select RT_USING_DFS_ELMFAT
+    help
+        Reuse the board-owned EHCI HCD and unchanged CherryUSB core/hub/MSC.
+        Firmware supplies the PCI BAR, PHY and VBUS. Only root port 1 is
+        exposed; other root ports, OHCI and OTG are not supported here.
+
+config BSP_USING_USB_CAMERA
+    bool "OpenLANPU UVC camera on Xingyun EHCI port 1"
+    depends on BSP_USING_USB_HOST && RT_USING_SMART && RT_USING_DFS_V2
+    depends on RT_USING_DFS_DEVFS && RT_USING_POSIX_DEVIO && RT_USING_POSIX_POLL
+    depends on RT_TICK_PER_SECOND >= 1000
+    default n
+    help
+        Project-owned UVC MJPEG/YUYV capture through /dev/video0.
+        Uses permanent uncached DMA storage and copied frame queues.

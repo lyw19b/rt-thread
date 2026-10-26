@@ -85,6 +85,9 @@ struct ls2k_gmac
     unsigned int speed;
     int link, duplex, running;
     uint64_t tx_packets, rx_packets, tx_errors, rx_errors;
+    /* Optional observer, called after DMA releases ownership and before reuse.
+     * It must not change descriptors or packet data. */
+    void (*tx_complete)(struct ls2k_gmac *mac, unsigned int slot, size_t length);
 };
 
 int ls2k_gmac_mdio_read(struct ls2k_gmac *mac, unsigned int phy,

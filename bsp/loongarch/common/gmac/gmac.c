@@ -241,6 +241,12 @@ void ls2k_gmac_reclaim_tx(struct ls2k_gmac *mac)
         if (status & GMAC_DESC_OWN)
             break;
         _barrier(mac);
+
+        if (mac->tx_complete)
+        {
+            mac->tx_complete(mac, mac->tx_tail, desc->length);
+        }
+
         if (status & GMAC_DESC_ERROR)
             mac->tx_errors++;
         else
