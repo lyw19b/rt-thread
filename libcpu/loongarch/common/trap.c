@@ -33,6 +33,7 @@
 #include "tlb.h"
 #endif
 #include "break.h"
+#include "inst.h"
 
 #define MAX_HANDLERS 128
 
@@ -241,6 +242,11 @@ void do_ade(struct pt_regs *regs)
 
 void do_ale(struct pt_regs *regs)
 {
+    if (loongarch_try_emulate_ale(regs))
+    {
+        return;
+    }
+
     fatal_exception(regs, "Unaligned access");
 }
 

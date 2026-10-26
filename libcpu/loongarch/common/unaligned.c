@@ -11,10 +11,12 @@
 #include <rtthread.h>
 #include <inst.h>
 #include <stack.h>
+#include <rthw.h>
+#include <loongarch.h>
 
-/* The emulator accesses live FPRs and stops on unsupported instructions.
- * Memory faults are not recoverable here. do_ale() keeps its separate fatal
- * exception policy; callers invoke this helper explicitly. */
+/* Explicit helper calls below retain their live-FPR interface. ALE recovery
+ * instead updates the saved frame and validates the complete memory range
+ * before using byte accesses, which have no nested-fault fixup. */
 
 struct memory_opcode
 {
@@ -23,6 +25,13 @@ struct memory_opcode
     rt_uint8_t size;
     rt_uint8_t flags;
 };
+
+static rt_ubase_t recovered_ale[2];
+
+rt_ubase_t loongarch_ale_count(rt_bool_t user)
+{
+    return __atomic_load_n(&recovered_ale[user != 0], __ATOMIC_RELAXED);
+}
 
 /* Compare only the opcode: BADV already supplies the effective address. */
 static const struct memory_opcode memory_opcodes[] = {
@@ -79,6 +88,155 @@ rt_bool_t loongarch_decode_mem_access(rt_uint32_t word, struct loongarch_mem_acc
         }
     }
     return RT_FALSE;
+}
+
+/** @brief Deny implicit recovery until the BSP supplies its stable RAM policy. */
+rt_weak rt_bool_t loongarch_unaligned_access_ok(rt_ubase_t address, rt_size_t size,
+                                              rt_bool_t write, rt_bool_t instruction)
+{
+    RT_UNUSED(address);
+    RT_UNUSED(size);
+    RT_UNUSED(write);
+    RT_UNUSED(instruction);
+
+    return RT_FALSE;
+}
+
+/**
+ * @brief Transfer validated scalar bytes without taking a nested memory fault.
+ * @note User copies may sleep; their caller restores the interrupted IRQ state.
+ */
+static rt_bool_t ale_copy(struct pt_regs *regs, void *buffer, rt_ubase_t address,
+                         rt_size_t size, rt_bool_t write, rt_bool_t instruction)
+{
+    rt_size_t i;
+
+    if (regs->r_prmd & 3)
+    {
+#ifdef RT_USING_SMART
+        return loongarch_unaligned_user_copy(buffer, address, size, write, instruction);
+#else
+        return RT_FALSE;
+#endif
+    }
+
+    if (!loongarch_unaligned_access_ok(address, size, write, instruction))
+    {
+        return RT_FALSE;
+    }
+
+    for (i = 0; i < size; i++)
+    {
+        if (write)
+        {
+            ((volatile rt_uint8_t *)address)[i] = ((rt_uint8_t *)buffer)[i];
+        }
+        else
+        {
+            ((rt_uint8_t *)buffer)[i] = ((volatile rt_uint8_t *)address)[i];
+        }
+    }
+
+    return RT_TRUE;
+}
+
+/**
+ * @brief Recover a scalar ALE using the complete saved exception context.
+ * @note MMIO, atomic/vector instructions and invalid mappings are rejected.
+ *       A failed transfer leaves the saved destination and ERA unchanged.
+ *       FPR results belong in the frame: exception return restores all FPRs.
+ */
+rt_bool_t loongarch_try_emulate_ale(struct pt_regs *regs)
+{
+    struct loongarch_mem_access access;
+    rt_ubase_t *gpr = (rt_ubase_t *)regs;
+    rt_uint64_t value = 0;
+    rt_uint32_t word;
+    rt_bool_t store, success = RT_FALSE;
+    rt_bool_t user = (regs->r_prmd & 3) != 0;
+
+    if (regs->r_era & 3)
+    {
+        return RT_FALSE;
+    }
+
+    if (user)
+    {
+        if (!(regs->r_prmd & CSR_PRMD_PIE) || !rt_scheduler_is_available())
+        {
+            return RT_FALSE;
+        }
+
+        rt_hw_local_irq_enable(regs->r_prmd & CSR_PRMD_PIE);
+    }
+
+    if (!ale_copy(regs, &word, regs->r_era, sizeof(word), RT_FALSE, RT_TRUE) ||
+        !loongarch_decode_mem_access(word, &access))
+    {
+        goto out;
+    }
+
+    store = (access.flags & LOONGARCH_MEM_STORE) != 0;
+
+    /* Kernel r21 is the live per-CPU base and is not restored from pt_regs.
+     * A store can read it here; treating a load as recovered would lose its
+     * result. User r21, like the other user GPRs, lives in the saved frame. */
+    if (!(regs->r_bvaddr & (access.size - 1)) ||
+        (!user && !store && !(access.flags & LOONGARCH_MEM_FLOAT) && access.reg == 21))
+    {
+        goto out;
+    }
+
+    if (store)
+    {
+        if (access.flags & LOONGARCH_MEM_FLOAT)
+        {
+            value = regs->f[access.reg];
+        }
+        else if (!user && access.reg == 21)
+        {
+            __asm__ volatile("move %0, $r21" : "=r"(value));
+        }
+        else
+        {
+            value = access.reg ? gpr[access.reg] : 0;
+        }
+    }
+
+    if (!ale_copy(regs, &value, regs->r_bvaddr, access.size, store, RT_FALSE))
+    {
+        goto out;
+    }
+
+    if (!store)
+    {
+        if ((access.flags & LOONGARCH_MEM_SIGNED) && access.size < 8 &&
+            (value & (1ULL << (access.size * 8 - 1))))
+        {
+            value |= ~0ULL << (access.size * 8);
+        }
+
+        if (access.flags & LOONGARCH_MEM_FLOAT)
+        {
+            regs->f[access.reg] = value;
+        }
+        else if (access.reg)
+        {
+            gpr[access.reg] = value;
+        }
+    }
+
+    regs->r_era += sizeof(word);
+    __atomic_fetch_add(&recovered_ale[user], 1, __ATOMIC_RELAXED);
+    success = RT_TRUE;
+
+out:
+    if (user)
+    {
+        rt_hw_local_irq_disable();
+    }
+
+    return success;
 }
 
 /* FPR operands must be assembler constants. Share the register list between

@@ -7,8 +7,12 @@
 #include <rthw.h>
 #include <ioremap.h>
 #include <mm_private.h>
+#include <lwp.h>
+#include <lwp_arch.h>
+
 #include "mmu.h"
 #include "loongarch.h"
+#include "inst.h"
 
 rt_align(ARCH_PAGE_SIZE) rt_ubase_t MMUTable[512];
 
@@ -241,6 +245,155 @@ void *rt_hw_mmu_v2p(rt_aspace_t aspace, void *vaddr)
         return ARCH_MAP_FAILED;
     
     return (void *)((*pte & ARCH_PAGE_ADDRESS_MASK) | (va & ARCH_PAGE_MASK));
+}
+
+static rt_bool_t ale_user_permission(rt_ubase_t attr, rt_bool_t write,
+                                     rt_bool_t instruction)
+{
+    if ((attr & MMU_PAGE_USER) != MMU_PAGE_USER ||
+        (attr & (1UL << MMU_PAGE_RPLV_SHIFT)))
+    {
+        return RT_FALSE;
+    }
+
+    if (instruction)
+    {
+        return !(attr & MMU_PAGE_NO_EXEC);
+    }
+
+    if (write)
+    {
+        return (attr & MMU_PAGE_WRITE) != 0;
+    }
+
+    return (attr & MMU_PAGE_VALID) && !(attr & (1UL << MMU_PAGE_NO_READ_SHIFT));
+}
+
+/**
+ * @brief Copy up to eight user bytes for scalar ALE recovery, without faulting.
+ * @note Called with scheduling available and IRQs enabled. The address-space
+ *       mutex pins both mappings until the complete copy finishes. Both pages
+ *       are checked before stores; demand paging and CoW use the normal VM
+ *       resolver. MMIO and noncached mappings are never accessed bytewise.
+ */
+rt_bool_t loongarch_unaligned_user_copy(void *buffer, rt_ubase_t address,
+                                      rt_size_t size, rt_bool_t write,
+                                      rt_bool_t instruction)
+{
+    struct rt_lwp *lwp = lwp_self();
+    rt_aspace_t aspace;
+    rt_uint8_t *aliases[2];
+    rt_size_t lengths[2];
+    rt_size_t count = 0, remaining = size, i, j;
+    rt_ubase_t cursor = address;
+    rt_bool_t success = RT_FALSE;
+
+    if (!lwp || !lwp->aspace || !size || size > 8 ||
+        address < USER_VADDR_START || address >= USER_VADDR_TOP ||
+        size > USER_VADDR_TOP - address)
+    {
+        return RT_FALSE;
+    }
+
+    aspace = lwp->aspace;
+
+    if (rt_mutex_take(&aspace->bst_lock, RT_WAITING_FOREVER) != RT_EOK)
+    {
+        return RT_FALSE;
+    }
+
+    while (remaining)
+    {
+        rt_varea_t varea = rt_aspace_query(aspace, (void *)cursor);
+        rt_ubase_t *pte;
+        rt_ubase_t entry, alias;
+        rt_size_t chunk = ARCH_PAGE_SIZE - (cursor & ARCH_PAGE_MASK);
+        struct rt_aspace_fault_msg fault = {
+            .fault_vaddr = (void *)cursor,
+            .fault_type = MM_FAULT_TYPE_GENERIC_MMU,
+            .fault_op = instruction ? MM_FAULT_OP_EXECUTE :
+                        write ? MM_FAULT_OP_WRITE : MM_FAULT_OP_READ,
+        };
+
+        if (chunk > remaining)
+        {
+            chunk = remaining;
+        }
+
+        if (!varea ||
+            !ale_user_permission(varea->attr, write, instruction) ||
+            (varea->attr & (3UL << MMU_CACHE_SHIFT)) != MMU_CACHE_CC)
+        {
+            goto out;
+        }
+
+        pte = walk(aspace, cursor, RT_FALSE);
+
+        if (!pte || !(*pte & MMU_PAGE_VALID) ||
+            (write && ((*pte & (MMU_PAGE_WRITE | MMU_PAGE_DIRTY)) !=
+                       (MMU_PAGE_WRITE | MMU_PAGE_DIRTY))))
+        {
+            /* bst_lock is recursive; the resolver owns the normal CoW path. */
+            if (!rt_aspace_fault_try_fix(aspace, &fault))
+            {
+                goto out;
+            }
+
+            pte = walk(aspace, cursor, RT_FALSE);
+        }
+
+        if (!pte)
+        {
+            goto out;
+        }
+
+        entry = *pte;
+
+        if (!(entry & MMU_PAGE_VALID) ||
+            !ale_user_permission(entry, write, instruction) ||
+            (entry & (3UL << MMU_CACHE_SHIFT)) != MMU_CACHE_CC ||
+            (write && !(entry & MMU_PAGE_DIRTY)))
+        {
+            goto out;
+        }
+
+        alias = ARCH_PAGE_PA2VA((entry & ARCH_PAGE_ADDRESS_MASK) |
+                                (cursor & ARCH_PAGE_MASK));
+
+        if (!loongarch_unaligned_access_ok(alias, chunk, write, RT_FALSE))
+        {
+            goto out;
+        }
+
+        aliases[count] = (rt_uint8_t *)alias;
+        lengths[count++] = chunk;
+        cursor += chunk;
+        remaining -= chunk;
+    }
+
+    for (i = 0; i < count; i++)
+    {
+        for (j = 0; j < lengths[i]; j++)
+        {
+            if (write)
+            {
+                ((volatile rt_uint8_t *)aliases[i])[j] = *(rt_uint8_t *)buffer;
+            }
+            else
+            {
+                *(rt_uint8_t *)buffer = ((volatile rt_uint8_t *)aliases[i])[j];
+            }
+
+            buffer = (rt_uint8_t *)buffer + 1;
+        }
+    }
+
+    success = RT_TRUE;
+
+out:
+    rt_mutex_release(&aspace->bst_lock);
+
+    return success;
 }
 
 /**
