@@ -25,13 +25,14 @@
 #include "usbh_core.h"
 #include "usbh_hub.h"
 #include "ls2k_ehci.h"
+#include "ls2k_usb_platform.h"
 #ifdef BSP_USING_USB_CAMERA
 #include "ls2k_ehci_iso.h"
 #include "ls2k_usb_camera.h"
 #endif
 
-#define USB_IRQ 46
-#define USB_BASE 0x16080000UL
+static int usb_irq;
+static unsigned int hardware_ports;
 #define USB_ASYNC_SLOTS 4
 
 static struct ls2k_usb_dma usb_storage
@@ -161,7 +162,7 @@ static void usb_interrupt(int vector, void *parameter)
     RT_UNUSED(vector);
     RT_UNUSED(parameter);
     /* Mask until the worker acknowledges PCD. No descriptor access in ISR. */
-    rt_hw_interrupt_mask(USB_IRQ);
+    rt_hw_interrupt_mask(usb_irq);
     rt_sem_release(&host_event);
 }
 
@@ -229,7 +230,7 @@ static void usb_worker(void *parameter)
 
             if (controller.ready)
             {
-                rt_hw_interrupt_umask(USB_IRQ);
+                rt_hw_interrupt_umask(usb_irq);
             }
         }
 
@@ -262,7 +263,7 @@ int usb_hc_init(struct usbh_bus *bus)
             bus->hcd.roothub.speed = USB_SPEED_HIGH;
             port_update(0, 1U << 12, 0);
             usb_write(NULL, LUSB_INTR, 4);
-            rt_hw_interrupt_umask(USB_IRQ);
+            rt_hw_interrupt_umask(usb_irq);
             rt_sem_release(&host_event);
         }
     }
@@ -279,7 +280,7 @@ int usb_hc_deinit(struct usbh_bus *bus)
 
     RT_UNUSED(bus);
     rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
-    rt_hw_interrupt_mask(USB_IRQ);
+    rt_hw_interrupt_mask(usb_irq);
 #ifdef BSP_USING_USB_CAMERA
     ls2k_iso_stop(&controller);
     camera_port = NULL;
@@ -556,7 +557,7 @@ void USBH_IRQHandler(uint8_t busid)
 {
     if (!busid)
     {
-        usb_interrupt(USB_IRQ, NULL);
+        usb_interrupt(usb_irq, NULL);
     }
 }
 
@@ -571,11 +572,17 @@ static void usb_status(void)
         rt_kprintf("cmd=%08x sts=%08x port=%08x (HS host; OHCI/OTG disabled)\n",
                    usb_read(NULL, LUSB_CMD), usb_read(NULL, LUSB_STS),
                    usb_read(NULL, LUSB_PORT));
+
+        for (unsigned int port = 1; port < hardware_ports; port++)
+        {
+            rt_kprintf("hardware port %u: %08x (not exposed)\n", port + 1,
+                       usb_read(NULL, LUSB_PORT + port * 4));
+        }
     }
 
     rt_mutex_release(&host_lock);
 }
-MSH_CMD_EXPORT(usb_status, show LS2K0300 USB host state);
+MSH_CMD_EXPORT(usb_status, show LS2K USB host state);
 static long usb_list(int argc, char **argv)
 {
     return lsusb(argc, argv);
@@ -588,36 +595,38 @@ MSH_CMD_EXPORT_ALIAS(usb_list, lsusb, list enumerated USB devices);
 
 static int ls2k_usb_init(void)
 {
-    rt_ubase_t base = LOONGARCH_PHYS_UNCACHED(USB_BASE);
+    rt_ubase_t base;
     uint32_t cap, parameters;
+    rt_err_t error;
     rt_thread_t worker;
 
     rt_mutex_init(&host_lock, "usb_host", RT_IPC_FLAG_PRIO);
     rt_mutex_init(&callback_lock, "usb_cb", RT_IPC_FLAG_PRIO);
     rt_sem_init(&host_event, "usb_event", 0, RT_IPC_FLAG_PRIO);
-    /* Do not reset the shared USB/OTG PHY or invent board VBUS GPIOs. */
-    if ((HWREG32(LOONGARCH_PHYS_UNCACHED(0x16000114UL)) & 0x180) != 0x180 ||
-        (HWREG32(LOONGARCH_PHYS_UNCACHED(0x1600011cUL)) & 0x180) != 0x180)
+    error = ls2k_usb_platform_init(&base, &usb_irq, &hardware_ports);
+
+    if (error)
     {
-        rt_kprintf("USB: firmware must enable USB/shared clocks and release reset\n");
-        return -RT_ERROR;
+        return error;
     }
 
     cap = HWREG32(base);
     parameters = HWREG32(base + 4);
     if ((cap & 0xff) < 0x10 || (cap & 0xff) > 0x80 || (cap & 3) ||
-        (cap >> 16) != 0x100 || (parameters & 15) != 1)
+        (cap >> 16) != 0x100 || (parameters & 15) != hardware_ports)
     {
         rt_kprintf("USB: unexpected EHCI capabilities %08x %08x\n", cap, parameters);
         return -RT_ERROR;
     }
 
+    rt_kprintf("USB EHCI: base=%p irq=%d hardware_ports=%u, exposing port 1\n",
+               (void *)base, usb_irq, hardware_ports);
     operational = base + (cap & 0xff);
     port_power_control = (parameters & 16) != 0;
     controller.io = &usb_io;
     controller.dma = (void *)LOONGARCH_PHYS_UNCACHED(LOONGARCH_ALIAS_PHYS(&usb_storage));
-    rt_hw_interrupt_mask(USB_IRQ);
-    rt_hw_interrupt_install(USB_IRQ, usb_interrupt, NULL, "usb_ehci");
+    rt_hw_interrupt_mask(usb_irq);
+    rt_hw_interrupt_install(usb_irq, usb_interrupt, NULL, "usb_ehci");
     worker = rt_thread_create("usb_poll", usb_worker, NULL, 4096, 14, 10);
     if (!worker)
     {
