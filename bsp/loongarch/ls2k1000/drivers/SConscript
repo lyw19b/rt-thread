@@ -1,4 +1,5 @@
 from building import *
+import rtconfig
 
 cwd = GetCurrentDir()
 src = Glob('*.c') + Glob('*.cpp') + Glob('*_gcc.S')
@@ -16,5 +17,21 @@ for d in list:
         objs = objs + SConscript(os.path.join(d, 'SConscript'))
 
 group = group + objs
+
+if GetDepend('BSP_USING_NOVAUI'):
+    ui_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT, '..', '..',
+                                        'display', 'novauiOS', 'platform', 'rtos'))
+    group += SConscript(os.path.join(ui_dir, 'SConscript'),
+                       variant_dir='novaui', duplicate=0)
+
+if GetDepend('BSP_USING_XINGYUN_TOUCH'):
+    driver_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT, '..', '..', 'driver'))
+    touch_dir = os.path.join(driver_dir, 'rtos', 'display')
+    VariantDir('xingyun_touch', touch_dir, duplicate=0)
+    paths = [os.path.join(driver_dir, 'rtos', part)
+             for part in ('os', 'include', 'core')]
+    paths += [os.path.join(driver_dir, 'include')]
+    group += DefineGroup('XingyunTouch', ['xingyun_touch/gt911.c'],
+                         depend=['BSP_USING_XINGYUN_TOUCH'], CPPPATH=paths)
 
 Return('group')

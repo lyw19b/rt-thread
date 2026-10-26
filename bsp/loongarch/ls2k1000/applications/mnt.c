@@ -1,6 +1,36 @@
+/*
+ * Copyright (c) 2026, OpenLANPU Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                  Notes
+ * 2026-10-26     OpenLANPU Contributors    add Xingyun Smart board setup
+ *
+ * Description:
+ *   Mount the Smart temporary filesystem before launching user applications.
+ */
+
 #include <rthw.h>
 #include <rtthread.h>
 #include <klibc/kerrno.h>
+
+#if defined(RT_USING_SMART) && defined(RT_USING_DFS_TMPFS) && defined(RT_USING_DFS_ROMFS)
+#include <dfs_fs.h>
+#include <dfs_romfs.h>
+
+static int smart_filesystem_init(void)
+{
+    if (dfs_mount(RT_NULL, "/", "rom", 0, &romfs_root) != 0 ||
+        dfs_mount(RT_NULL, "/mnt", "tmp", 0, RT_NULL) != 0)
+    {
+        rt_kprintf("Failed to mount Smart temporary filesystem\n");
+        return -RT_ERROR;
+    }
+
+    return RT_EOK;
+}
+INIT_ENV_EXPORT(smart_filesystem_init);
+#endif
 
 #ifdef PKG_USING_LWEXT4
 

@@ -1,6 +1,6 @@
 # LS2K1000LA 与 LS2K0300
 
-本 BSP 面向 LoongArch 版龙芯 2K1000LA，默认使用双核 SMP RT-Thread 标准版。板级地址和外设连接参考 `rt-thread-2k1000/bsp/loongarch/ls2kdev`，网络驱动已重新组织实现。Nano、Smart 的 QEMU 配置仍在 `bsp/qemu-virt64-loongarch`；本板尚未实现 Smart 地址空间初始化。
+本 BSP 面向 LoongArch 版龙芯 2K1000LA，默认使用双核 SMP RT-Thread 标准版。板级地址和外设连接参考 `rt-thread-2k1000/bsp/loongarch/ls2kdev`，网络驱动已重新组织实现。Nano、Smart 的 QEMU 配置仍在 `bsp/qemu-virt64-loongarch`；本板提供 `smart_defconfig`，已实现高 DDR 的 Smart 地址空间初始化。
 
 ## 构建
 
@@ -93,6 +93,72 @@ python3 examples/test/ls2k_gmac_test.py --peer 192.168.1.20 --frames 10000 --win
 
 当前尚未进行实板收发验证。现有主线 LoongArch QEMU 只有 `virt` 机型，不能代替 LS2K1000LA GMAC 验证。AHCI 可选驱动沿用上一阶段迁入版本，不属于此次网络重构范围。
 
+## 星云板首次实测（2026-10-26）
+
+广东龙芯星云板实机由串口和 U-Boot 确认为 LS2K1000-DP / LA264，
+PRID `0014a000`，双核、1 GiB DDR3。固件为 U-Boot 2022.04
+`v2.0.0-00075-g29d49740-dirty`，报告 CPU 1000 MHz、总线 125 MHz。
+串口为 UART0，115200 8N1。高内存窗口为
+`0x9000000090000000..0x90000000bfffffff`；本 BSP 的加载地址和
+64 MiB 堆位于该窗口内，不占用低内存的固件及显示缓冲区。
+
+测试仅经 XMODEM 分段加载 RAM，每段及完整镜像均核对 CRC32；没有
+烧写存储或执行 `saveenv`。独立 UART hello 返回 U-Boot 成功，单核和
+双核标准版均启动。双核固件邮箱交接实测显示 `mask 0x3`。
+
+已完成的实板测试包括：
+
+- `port_test 5000`：调度、IPC、软定时器、堆和浮点上下文通过，堆占用
+  测试前后均为 10256 字节。
+- `smp_test 100000`：两核各 100000 轮，锁与原子累计 200000，迁移和
+  IPI 检查通过，错误数为 0。
+- `smp_reap_test 1000`：共 2000 个线程退出或远程删除并回收，通过。
+- `ale_test`：28 种指令、100 轮、跨页及拒绝范围检查通过，实际恢复
+  40000 次异常。首次镜像因缺少 BSP RAM 策略明确拒绝执行，补充
+  `drivers/ls2k_unaligned.c` 后通过；只允许链接镜像和堆的缓存映射，
+  排除设备、DMA、非缓存别名和对代码/异常向量的写入。
+
+首次双核启动发现并发打印覆盖共享格式化缓冲区，标准和网络配置已启用
+内核现有 `RT_USING_THREADSAFE_PRINTF`。该选项会增加同步打印时的
+中断/调度延迟，时间敏感路径不应大量打印；没有修改公共打印实现。
+
+该配置变更后的镜像经软件重启复测时出现 `SMP: CPU 1 did not start`，
+停在启动断言。随后同一修正版镜像冷启动及软件重启后重新加载均通过
+上述测试；该次失败原因仍未确认，不能据此宣称重复启动问题已经修复。
+
+项目根目录的 `system/driver/tests/rtos/build_xingyun_kernel.py` 和
+`test_xingyun_serial.py` 保留隔离构建及串口复测流程。以上条目是标准版
+内核基础验证，不能代替长时间稳定性测试。Smart UI 的验证范围见下文。
+
+## 星云板 Smart 与 NovaUIOS
+
+`smart_defconfig` 启用双核、软件页表、ROMFS/TMPFS。内核从物理
+`0x98000000` 加载，堆结束于 `0xa0000000`，页分配器使用
+`0xa0000000..0xb8000000`。NovaUIOS 运行在独立 Smart 用户进程中。
+
+`BSP_USING_XINGYUN_LCD` 校验并接管固件 DVO1 的 1024×600、ARGB8888
+显示：保留像素时钟、引脚复用及物理 `0x0dc00000` 的固件显存，使用两块
+私有绘制缓冲区，在提交时复制到扫描缓冲区。该方式不保证垂直同步，
+不能视为硬件双缓冲翻页。2026-10-26 双核 Smart 实板启动达到
+`NOVAUI READY`，进程 `active=1`、显示错误数为零；用户确认同一块
+ATK-MD0700R-1024x600 屏上的文字、布局和显示清晰正常。
+
+`BSP_USING_XINGYUN_TOUCH` 接入物理 I2C1（Linux DTS 的 i2c3，
+`0x1fe21800`），使用 125 MHz 总线时钟、100 kHz I²C、字节寄存器访问。
+只探测 Goodix 的 `0x5d` 和 `0x14` 地址，复用项目 GT9xx 单点解析器。
+采用线程上下文轮询，保留触摸芯片出厂范围、校验和及中断模式；不猜测
+复位 GPIO、不改写完整配置。`RT_TOUCH_PIN_IRQ` 应关闭。
+`xingyun_touch_status` 查看总线传输及失败计数，不消耗 UI 的触摸报告。
+2026-10-26 实板识别 GT911（地址 `0x5d`），范围 1024×600；用户确认
+点击和拖动正常、位置准确，观测期间总线失败数和 UI 显示错误数均为零。
+本次验证为单点触摸，不代表多点手势或长期稳定性已通过。
+
+项目 `system/driver/tests/rtos/build_xingyun_kernel.py --application ELF`
+构建隔离的双核 Smart UI 镜像，`test_xingyun_novaui.py` 加载 gzip uImage、
+校验压缩和解压镜像、检查两核上线及 UI 状态。测试只写 RAM。
+当前开发和后续网口、USB 摄像头测试以星云板为主，每次启动双核并核对
+`SMP: 2 CPUs online (mask 0x3)`；已连接网线及摄像头不等于驱动已通过验证。
+
 ## LS2K0300
 
 代码位于 `bsp/loongarch/ls2k0300`。芯片参数依据龙芯官网的
@@ -118,7 +184,7 @@ scons --pyconfig-silent
 scons -j8
 ```
 
-默认 `.config` 为标准版；`network_defconfig` 启用双 GMAC，Smart 也可在 menuconfig 中启用同一网络驱动。`smart_defconfig` 使用临时根文件系统，重启后数据丢失；尚未提供 SDIO/eMMC 存储驱动或完整 musl 用户态发行环境。系统调用沿用仓库官方表，不重新编号。2K0300 和 2K1000LA 均只使用软件 TLB refill，Kconfig 不允许选择硬件 PTW；2K1000LA 的 Smart 板级内存初始化仍未提供。
+默认 `.config` 为标准版；`network_defconfig` 启用双 GMAC，Smart 也可在 menuconfig 中启用同一网络驱动。`smart_defconfig` 使用临时根文件系统，重启后数据丢失；尚未提供 SDIO/eMMC 存储驱动或完整 musl 用户态发行环境。系统调用沿用仓库官方表，不重新编号。2K0300 和 2K1000LA 均只使用软件 TLB refill，Kconfig 不允许选择硬件 PTW；2K1000LA 的 Smart 板级内存初始化使用高 DDR，避免占用固件显示缓冲区。
 
 `BSP_UART_INDEX` 选择控制台 UART0～9，设备名固定为 `uart`。默认 UART0，115200、8N1；实际调试口若接在其他 UART，需调整该选项。驱动读取采样模式、DDR PLL 和 APB 分频寄存器得到时钟；`BSP_UART_CLOCK_HZ` 非零时可明确覆盖输入频率。PLL、DDR 初始化、引脚复用、外部 PHY 复位及 RGMII 延迟由引导固件完成，驱动不会猜测板上连接或重写这些设置。
 

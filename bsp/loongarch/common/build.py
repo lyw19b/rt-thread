@@ -30,9 +30,6 @@ objs = PrepareBuilding(env, RTT_ROOT, has_libcpu = False)
 
 stack_size = 16384
 
-if GetDepend('RT_USING_SMART') and GetDepend('SOC_LS2K1000LA'):
-    raise RuntimeError('LS2K1000LA Smart memory setup is not ported; use bsp/qemu-virt64-loongarch')
-
 if GetDepend('__STACKSIZE__'):
     stack_size = GetDepend('__STACKSIZE__')
 with open('link_stacksize.lds', 'w') as stack_lds:

@@ -20,6 +20,8 @@ config SOC_LS2K1000LA
     select RT_USING_USER_MAIN
     select RT_USING_CACHE
     select ARCH_LOONGARCH_FPU
+    select ARCH_MM_MMU if RT_USING_SMART
+    select ARCH_REMAP_KERNEL if RT_USING_SMART
     default y
 
 config __STACKSIZE__
@@ -40,4 +42,21 @@ source "$(RTT_DIR)/bsp/loongarch/common/gmac/Kconfig"
 
 config BSP_USING_SELFTEST
     bool "Build kernel port regression and stress commands"
+    default n
+
+config BSP_USING_XINGYUN_LCD
+    bool "Xingyun U-Boot 1024x600 RGB framebuffer handoff"
+    depends on RT_USING_SMART
+    default n
+    help
+        Validate and reuse the firmware DVO1 mode and reserved framebuffer.
+        The driver does not change the panel clocks or pin routing.
+
+source "$(RTT_DIR)/../../display/novauiOS/platform/rtos/Kconfig"
+
+config BSP_USING_XINGYUN_TOUCH
+    bool "Xingyun physical I2C1 Goodix touch (polling)"
+    depends on BSP_USING_XINGYUN_LCD
+    select RT_USING_I2C
+    select RT_USING_TOUCH
     default n
