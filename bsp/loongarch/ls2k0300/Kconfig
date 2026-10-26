@@ -69,6 +69,16 @@ config BSP_USING_VANGUARD_TOUCH
         novae_2k0302 virtual GT911 at 0x5d/IRQ62. A QEMU without a touch
         model will report probe failure, while optional-touch UI can run.
 
+config BSP_USING_HUMMINGBIRD
+    bool "Hummingbird LS2K300-MINI-DP physical LCD and I2C1 touch"
+    depends on LAXPU_USING_DISPLAY && !BSP_USING_VANGUARD_TOUCH && !BSP_USING_LS2K0300_QEMU
+    default n
+    help
+        Use ls2k300_mini_dp.dts geometry with the tested 45 MHz ATK panel
+        clock, GPIO84 backlight,
+        I2C1 on GPIO50/51 and GT911/GT9147 INT on GPIO82 (LIOINTC IRQ58).
+        This standard SoC board does not contain the project Novae accelerator.
+
 config BSP_USING_SELFTEST
     bool "Build kernel port regression and stress commands"
     default n
@@ -127,8 +137,20 @@ menuconfig BSP_USING_USB_HOST
         Board-owned EHCI HCD with unchanged CherryUSB core/hub/MSC sources.
         High-speed USB disks may attach directly or through one high-speed hub.
         Firmware must supply VBUS, PHY reference clock and release USB reset.
-        OHCI low/full-speed devices, OTG, HID and isochronous are not enabled.
+        OHCI low/full-speed devices, OTG and HID are not enabled.
         DMA uses dedicated uncached physical memory in both DMW and PAGE modes.
+
+config BSP_USING_USB_CAMERA
+    bool "OpenLANPU UVC camera (Vanguard high-speed USB Host)"
+    depends on BSP_USING_USB_HOST && RT_USING_SMART && RT_USING_DFS_V2
+    depends on RT_USING_DFS_DEVFS && RT_USING_POSIX_DEVIO && RT_USING_POSIX_POLL
+    depends on RT_TICK_PER_SECOND >= 1000
+    default n
+    help
+        Project-owned UVC 1.0/1.1/1.5 MJPEG and YUYV capture via /dev/video0.
+        Supports one high-speed isochronous IN (bInterval 1..4) or Bulk IN
+        stream. Uses bounded, permanent uncached DMA and copied frame rings.
+        Firmware must enable the board USB Host PHY and VBUS.
 
 source "$(RTT_DIR)/../../driver/rtos/Kconfig"
 

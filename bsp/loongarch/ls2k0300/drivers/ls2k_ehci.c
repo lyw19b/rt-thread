@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author                    Notes
+ * 2026-10-26     OpenLANPU Contributors    integrate the persistent camera stream
  * 2026-10-25     OpenLANPU Contributors    add bounded high-address USB host support
  *
  */
@@ -19,6 +20,9 @@
  */
 
 #include "ls2k_ehci.h"
+#ifdef LS2K_EHCI_CAMERA
+#include "ls2k_ehci_iso.h"
+#endif
 #include "usb_errno.h"
 #include <string.h>
 
@@ -75,6 +79,12 @@ int ls2k_ehci_stop(struct ls2k_ehci *hc)
     ret = wait_reg(hc, LUSB_STS, LUSB_HALTED | LUSB_ASS | LUSB_PSS,
                    LUSB_HALTED, 100);
     hc->ready = false;
+#ifdef LS2K_EHCI_CAMERA
+    if (hc->iso)
+    {
+        hc->iso->running = false;
+    }
+#endif
     if (ret)
     {
         hc->quarantined = true;
@@ -141,8 +151,34 @@ static void fill_td(struct ls2k_ehci *hc, unsigned int index,
     }
 }
 
-static int retire(struct ls2k_ehci *hc)
+static int retire(struct ls2k_ehci *hc, bool interrupt)
 {
+#ifdef LS2K_EHCI_CAMERA
+    if (hc->iso && interrupt)
+    {
+        /* Unlink only the interrupt QH, leaving every iTD active. Two full
+         * frames exceed the EHCI periodic prefetch window before QH reuse. */
+        ls2k_iso_tail(hc, 1, 0, 0);
+        hc->io->wait_ms(hc->ctx, 2);
+        hc->io->barrier(hc->ctx);
+        return 0;
+    }
+
+    if (hc->iso)
+    {
+        write_reg(hc, LUSB_CMD, read_reg(hc, LUSB_CMD) & ~LUSB_ASE);
+        if (wait_reg(hc, LUSB_STS, LUSB_ASS, 0, 100))
+        {
+            ls2k_ehci_stop(hc);
+            return -USB_ERR_IO;
+        }
+
+        return 0;
+    }
+#else
+    (void)interrupt;
+#endif
+
     write_reg(hc, LUSB_CMD, read_reg(hc, LUSB_CMD) & ~(LUSB_ASE | LUSB_PSE));
     if (wait_reg(hc, LUSB_STS, LUSB_ASS | LUSB_PSS, 0, 100))
     {
@@ -212,9 +248,18 @@ static int transfer_chunk(struct ls2k_ehci *hc, struct ls2k_usb_transfer *x,
 
         qh->capabilities |= interval == 1 ? 0xff :
                             (interval == 2 ? 0x55 : (interval == 4 ? 0x11 : 1));
-        for (unsigned int i = 0; i < 1024; ++i)
+#ifdef LS2K_EHCI_CAMERA
+        if (hc->iso)
         {
-            dma->frames[i] = i % frames == phase ? (queue | 2) : 1;
+            ls2k_iso_tail(hc, queue | 2, frames, phase);
+        }
+        else
+#endif
+        {
+            for (unsigned int i = 0; i < 1024; ++i)
+            {
+                dma->frames[i] = i % frames == phase ? (queue | 2) : 1;
+            }
         }
 
         write_reg(hc, LUSB_PERIODIC, dma_at(hc, offsetof(struct ls2k_usb_dma, frames)));
@@ -279,7 +324,7 @@ static int transfer_chunk(struct ls2k_ehci *hc, struct ls2k_usb_transfer *x,
         hc->io->wait_ms(hc->ctx, 1);
     }
 
-    if (retire(hc))
+    if (retire(hc, x->interrupt))
     {
         return -USB_ERR_IO;
     }
@@ -303,6 +348,13 @@ static int transfer_chunk(struct ls2k_ehci *hc, struct ls2k_usb_transfer *x,
     if (read_reg(hc, LUSB_STS) & LUSB_FATAL)
     {
         ret = -USB_ERR_IO;
+    }
+
+    /* Even a timed-out Bulk IN may have acknowledged packets. Preserve the
+     * retired overlay's next toggle so a streaming endpoint can resynchronize. */
+    if (!x->setup)
+    {
+        x->toggle = (qh->token & LUSB_TOGGLE) != 0;
     }
 
     if (ret)

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0
  */
 #include <rtthread.h>
-#if defined(BSP_USING_LAXPU) && !defined(BSP_USING_LS2K0300_QEMU)
+#if defined(BSP_USING_LAXPU) && !defined(BSP_USING_LS2K0300_QEMU) && !defined(BSP_USING_HUMMINGBIRD)
 #include <laxpu_board.h>
 #include "ls2k.h"
 
@@ -34,9 +34,15 @@ INIT_DEVICE_EXPORT(accelerator_init);
 #ifdef BSP_USING_VANGUARD_TOUCH
 int ls2k0300_vanguard_touch_init(void);
 #endif
+#ifdef BSP_USING_HUMMINGBIRD
+int ls2k0300_hummingbird_panel_init(void);
+#endif
 
 static int panel_init(void)
 {
+#ifdef BSP_USING_HUMMINGBIRD
+    return ls2k0300_hummingbird_panel_init();
+#else
     int error = ls2k0300_lcd_register((void *)LS2K_UNCACHED(0x16090000UL), 51);
 
     if (error)
@@ -59,6 +65,7 @@ static int panel_init(void)
     }
 
     return laxpu_gt911_register("i2c0", 0x5d, 62);
+#endif
 #endif
 }
 INIT_DEVICE_EXPORT(panel_init);

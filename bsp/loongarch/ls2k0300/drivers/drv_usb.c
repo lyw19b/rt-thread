@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author                    Notes
+ * 2026-10-26     OpenLANPU Contributors    integrate the persistent camera stream
  * 2026-10-25     OpenLANPU Contributors    add bounded high-address USB host support
  *
  */
@@ -24,6 +25,10 @@
 #include "usbh_core.h"
 #include "usbh_hub.h"
 #include "ls2k_ehci.h"
+#ifdef BSP_USING_USB_CAMERA
+#include "ls2k_ehci_iso.h"
+#include "ls2k_usb_camera.h"
+#endif
 
 #define USB_IRQ 46
 #define USB_BASE 0x16080000UL
@@ -33,6 +38,13 @@ static struct ls2k_usb_dma usb_storage
     __attribute__((section(".usb_dma"), aligned(4096)));
 static struct ls2k_ehci controller;
 static struct rt_mutex host_lock;
+static struct rt_mutex callback_lock;
+#ifdef BSP_USING_USB_CAMERA
+static struct ls2k_iso_dma camera_dma
+    __attribute__((section(".usb_dma"), aligned(4096)));
+static struct ls2k_iso camera_iso;
+static struct usbh_hubport *camera_port;
+#endif
 static struct rt_semaphore host_event;
 static struct usbh_bus *host_bus;
 static struct usbh_urb *pending[USB_ASYNC_SLOTS];
@@ -63,7 +75,13 @@ static uint32_t usb_time(void *ctx)
 static void usb_wait(void *ctx, unsigned int ms)
 {
     RT_UNUSED(ctx);
-    rt_thread_mdelay(ms);
+    for (unsigned i = 0; i < ms; ++i)
+    {
+        rt_thread_mdelay(1);
+#ifdef BSP_USING_USB_CAMERA
+        ls2k_iso_poll(&controller);
+#endif
+    }
 }
 
 static void usb_barrier(void *ctx)
@@ -153,8 +171,14 @@ static void usb_worker(void *parameter)
 
     for (;;)
     {
-        rt_sem_take(&host_event, rt_tick_from_millisecond(10));
+        struct usbh_urb *completed[USB_ASYNC_SLOTS] = {0};
+
+        rt_sem_take(&host_event, rt_tick_from_millisecond(1));
+        rt_mutex_take(&callback_lock, RT_WAITING_FOREVER);
         rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
+#ifdef BSP_USING_USB_CAMERA
+        ls2k_iso_poll(&controller);
+#endif
         if (controller.ready)
         {
             uint32_t port = usb_read(NULL, LUSB_PORT);
@@ -200,10 +224,7 @@ static void usb_worker(void *parameter)
                 }
 
                 pending[i] = NULL;
-                if (urb->complete)
-                {
-                    urb->complete(urb->arg, ret ? ret : (int)urb->actual_length);
-                }
+                completed[i] = urb;
             }
 
             if (controller.ready)
@@ -213,6 +234,18 @@ static void usb_worker(void *parameter)
         }
 
         rt_mutex_release(&host_lock);
+        for (unsigned i = 0; i < USB_ASYNC_SLOTS; ++i)
+        {
+            struct usbh_urb *urb = completed[i];
+
+            if (urb && urb->complete)
+            {
+                urb->complete(urb->arg, urb->errorcode ?
+                              urb->errorcode : (int)urb->actual_length);
+            }
+        }
+
+        rt_mutex_release(&callback_lock);
     }
 }
 
@@ -247,6 +280,10 @@ int usb_hc_deinit(struct usbh_bus *bus)
     RT_UNUSED(bus);
     rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
     rt_hw_interrupt_mask(USB_IRQ);
+#ifdef BSP_USING_USB_CAMERA
+    ls2k_iso_stop(&controller);
+    camera_port = NULL;
+#endif
     ret = ls2k_ehci_stop(&controller);
     rt_mutex_release(&host_lock);
     return ret;
@@ -437,8 +474,9 @@ int usbh_kill_urb(struct usbh_urb *urb)
         return -USB_ERR_INVAL;
     }
 
-    /* Synchronous transfers hold host_lock and are bounded. The caller cannot
-     * free a class/URB until this lock confirms hardware retirement. */
+    /* Serialize with detached callbacks before the caller may free the URB.
+     * The callback mutex is recursive, allowing a callback to cancel itself. */
+    rt_mutex_take(&callback_lock, RT_WAITING_FOREVER);
     rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
     for (unsigned int i = 0; i < USB_ASYNC_SLOTS; ++i)
     {
@@ -451,8 +489,68 @@ int usbh_kill_urb(struct usbh_urb *urb)
     urb->hcpriv = NULL;
     urb->errorcode = -USB_ERR_SHUTDOWN;
     rt_mutex_release(&host_lock);
+    rt_mutex_release(&callback_lock);
     return 0;
 }
+
+#ifdef BSP_USING_USB_CAMERA
+int ls2k_usb_camera_start(struct usbh_hubport *port, uint8_t endpoint,
+                          uint16_t packet, uint8_t interval)
+{
+    int ret = -USB_ERR_BUSY;
+
+    rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
+    if (!port || port->bus != host_bus || !port->connected ||
+        port->speed != USB_SPEED_HIGH || !(endpoint & 0x80))
+    {
+        ret = -USB_ERR_NOTCONN;
+    }
+    else if (!camera_port)
+    {
+        camera_iso.dma = (void *)LOONGARCH_PHYS_UNCACHED(LOONGARCH_ALIAS_PHYS(&camera_dma));
+        ret = ls2k_iso_start(&controller, &camera_iso,
+                             LOONGARCH_ALIAS_PHYS(&camera_dma), port->dev_addr,
+                             endpoint & 15, packet, interval);
+        if (!ret)
+        {
+            camera_port = port;
+        }
+    }
+
+    rt_mutex_release(&host_lock);
+    return ret;
+}
+
+int ls2k_usb_camera_stop(struct usbh_hubport *port)
+{
+    int ret = 0;
+
+    rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
+    if (port == camera_port)
+    {
+        ret = ls2k_iso_stop(&controller);
+        camera_port = NULL;
+    }
+
+    rt_mutex_release(&host_lock);
+    return ret;
+}
+
+int ls2k_usb_camera_read(struct usbh_hubport *port, uint8_t *data, size_t capacity)
+{
+    int ret = -USB_ERR_NODEV;
+
+    rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
+    if (port == camera_port && port->connected)
+    {
+        ls2k_iso_poll(&controller);
+        ret = ls2k_iso_read(&controller, data, capacity);
+    }
+
+    rt_mutex_release(&host_lock);
+    return ret;
+}
+#endif
 
 void USBH_IRQHandler(uint8_t busid)
 {
@@ -495,6 +593,7 @@ static int ls2k_usb_init(void)
     rt_thread_t worker;
 
     rt_mutex_init(&host_lock, "usb_host", RT_IPC_FLAG_PRIO);
+    rt_mutex_init(&callback_lock, "usb_cb", RT_IPC_FLAG_PRIO);
     rt_sem_init(&host_event, "usb_event", 0, RT_IPC_FLAG_PRIO);
     /* Do not reset the shared USB/OTG PHY or invent board VBUS GPIOs. */
     if ((HWREG32(LOONGARCH_PHYS_UNCACHED(0x16000114UL)) & 0x180) != 0x180 ||

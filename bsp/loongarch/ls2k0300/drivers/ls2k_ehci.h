@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author                    Notes
+ * 2026-10-26     OpenLANPU Contributors    integrate the persistent camera stream
  * 2026-10-25     OpenLANPU Contributors    add bounded high-address USB host support
  *
  */
@@ -12,6 +13,7 @@
 /*
  * Description:
  *   Serialized EHCI control/bulk and high-speed interrupt transport.
+ *   Optional persistent isochronous scheduling is owned by ls2k_ehci_iso.c.
  * Notes:
  *   The caller owns locking. All DMA uses a permanent uncached arena below
  *   4 GiB; arbitrary CPU buffers are copied and never truncated to bus addresses.
@@ -81,6 +83,8 @@ struct ls2k_usb_io
     bool (*cancelled)(void *ctx);
 };
 
+struct ls2k_iso;
+
 struct ls2k_ehci
 {
     const struct ls2k_usb_io *io;
@@ -88,6 +92,9 @@ struct ls2k_ehci
     struct ls2k_usb_dma *dma;
     uint32_t dma_address;
     bool ready, quarantined;
+#ifdef LS2K_EHCI_CAMERA
+    struct ls2k_iso *iso;
+#endif
 };
 
 struct ls2k_usb_transfer

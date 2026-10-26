@@ -6,16 +6,25 @@ cwd = GetCurrentDir()
 src = Glob('*.c')
 if not GetDepend('BSP_USING_SDIO'):
     SrcRemove(src, ['drv_sdio.c', 'ls2k_sdio.c'])
+if not GetDepend('BSP_USING_USB_CAMERA'):
+    SrcRemove(src, ['ls2k_ehci_iso.c'])
 if not GetDepend('BSP_USING_USB_HOST'):
     SrcRemove(src, ['drv_usb.c', 'drv_usb_msc.c', 'drv_usb_osal.c',
                     'ls2k_ehci.c', 'ls2k_usb_bot.c'])
 group = DefineGroup('LS2K0300 board', src, depend=[''], CPPPATH=[cwd],
-                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'],
+                    LOCAL_CPPDEFINES=['LS2K_EHCI_CAMERA'] if GetDepend('BSP_USING_USB_CAMERA') else [])
 if GetDepend('BSP_USING_LAXPU'):
     driver_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT,
                                             '..', '..', 'driver', 'rtos'))
     group = group + SConscript(os.path.join(driver_dir, 'SConscript'),
                        variant_dir='openlanpu', duplicate=0)
+
+if GetDepend('BSP_USING_USB_CAMERA'):
+    camera_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT,
+                                            '..', '..', 'driver', 'rtos', 'camera'))
+    group = group + SConscript(os.path.join(camera_dir, 'SConscript'),
+                       variant_dir='camera', duplicate=0)
 
 if GetDepend('BSP_USING_SYSTEMUI'):
     ui_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT,
