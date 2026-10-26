@@ -36,6 +36,16 @@ config BSP_UART_CLOCK_HZ
     range 0 500000000
     default 0
 
+config BSP_USING_LS2K0300_QEMU
+    bool "Standalone ls2k0300 QEMU direct-kernel boot"
+    default n
+    help
+        Select only for the external ls2k0300 machine, not novae_2k0302.
+        Its LIOINTC requires the CPU0 route bit. Supply USB clock/reset
+        state normally provided by firmware, without changing the emulator.
+        This machine has LCD scanout but no Novae accelerator or touch model.
+        Physical board defaults and firmware requirements remain unchanged.
+
 config BSP_RAM_END
     hex "End of usable low DDR (physical address)"
     range 0x4000000 0xff00000
@@ -44,6 +54,20 @@ config BSP_RAM_END
         The default uses the first 128 MiB only. Reserve firmware memory by
         lowering this boundary. The DDR controller window at 0x0ff00000 is
         excluded even when firmware leaves it enabled.
+
+config BSP_USING_VANGUARD_TOUCH
+    bool "Vanguard Pi I2C0 GT9147 touch wiring"
+    depends on LAXPU_USING_DISPLAY
+    default y if BSP_USING_LS2K0300_QEMU
+    default n
+    help
+        Use I2C0 at 0x16108000 with the DTS 200 MHz input clock, address
+        0x14, GPIO42 INT and GPIO55 RESET. Configure G48/G49 as I2C0.
+        GPIO32..47 share LIOINTC IRQ55, owned here by the touch adapter.
+        Preserve the panel's existing 1024x600/falling-edge configuration.
+        Enable on physical Vanguard boards; leave off for the legacy
+        novae_2k0302 virtual GT911 at 0x5d/IRQ62. A QEMU without a touch
+        model will report probe failure, while optional-touch UI can run.
 
 config BSP_USING_SELFTEST
     bool "Build kernel port regression and stress commands"

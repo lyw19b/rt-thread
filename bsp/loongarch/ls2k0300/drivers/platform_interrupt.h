@@ -8,7 +8,11 @@
 /* Processor User Manual V1.1, section 3.5, traditional 64-source routing. */
 #define MAX_INTR                   64
 #define LS2K_CONFIG_BASE            0x16000000UL
+#ifdef BSP_USING_LS2K0300_QEMU
+#define LS2K_LIO_ROUTE_VALUE        0x11 /* QEMU LIOINTC: INT0 plus CPU0. */
+#else
 #define LS2K_LIO_ROUTE_VALUE        0x10 /* INT0; low four bits are reserved */
+#endif
 #define LS2K_LIO_HAS_BOUNCE         0
 #include "liointc.h"
 

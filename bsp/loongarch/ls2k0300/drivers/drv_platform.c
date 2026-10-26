@@ -9,6 +9,19 @@
 #include "ls2k0300.h"
 #include "platform_interrupt.h"
 
+#if defined(BSP_USING_LS2K0300_QEMU) && defined(BSP_USING_USB_HOST)
+static int ls2k_qemu_boot_devices(void)
+{
+    /* Direct ELF boot has no firmware to enable USB/shared clocks. This
+     * opt-in model profile does not drive a physical VBUS GPIO or reset PHY. */
+    HWREG32(LS2K_UNCACHED(0x16000114UL)) |= 0x180;
+    HWREG32(LS2K_UNCACHED(0x1600011cUL)) |= 0x180;
+    rt_hw_dmb();
+    return RT_EOK;
+}
+INIT_PREV_EXPORT(ls2k_qemu_boot_devices);
+#endif
+
 void ls2k_interrupt_prepare(void)
 {
     /* Firmware can leave EXTIOI enabled. Use only the traditional controller

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0
  */
 #include <rtthread.h>
-#ifdef BSP_USING_LAXPU
+#if defined(BSP_USING_LAXPU) && !defined(BSP_USING_LS2K0300_QEMU)
 #include <laxpu_board.h>
 #include "ls2k.h"
 
@@ -28,19 +28,38 @@ INIT_DEVICE_EXPORT(accelerator_init);
 #endif
 
 #if defined(BSP_USING_LAXPU) && defined(LAXPU_USING_DISPLAY)
+#include "ls2k.h"
 #include <ls2k0300_display.h>
+
+#ifdef BSP_USING_VANGUARD_TOUCH
+int ls2k0300_vanguard_touch_init(void);
+#endif
 
 static int panel_init(void)
 {
     int error = ls2k0300_lcd_register((void *)LS2K_UNCACHED(0x16090000UL), 51);
+
     if (error)
+    {
         return error;
+    }
+
+#ifdef BSP_USING_VANGUARD_TOUCH
+    return ls2k0300_vanguard_touch_init();
+#elif defined(BSP_USING_LS2K0300_QEMU)
+    /* The standalone SoC machine has no external GT911 panel. */
+    return RT_EOK;
+#else
     /* The QEMU panel uses I2C0 and a dedicated virtual interrupt input. */
     error = ls2k0300_i2c_register((void *)LS2K_UNCACHED(0x16108000UL),
                                 50000000, "i2c0");
     if (error)
+    {
         return error;
+    }
+
     return laxpu_gt911_register("i2c0", 0x5d, 62);
+#endif
 }
 INIT_DEVICE_EXPORT(panel_init);
 #endif
