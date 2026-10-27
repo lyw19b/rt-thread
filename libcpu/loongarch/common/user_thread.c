@@ -1,11 +1,13 @@
 /*
- * Copyright (c) 2026, OpenLANPU Contributors
+ * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author                    Notes
- * 2026-10-27     OpenLANPU Contributors      reclaim legacy Smart user stacks
- *
+ * 2026-10-27     LoongsonLab               reclaim legacy Smart user stacks
+ */
+
+/*
  * Description:
  *   Release kernel-owned user stacks during deferred LWP thread cleanup.
  *   Clone threads have no kernel-owned stack recorded in user_stack; their

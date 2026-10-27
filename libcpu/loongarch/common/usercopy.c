@@ -1,10 +1,10 @@
 /*
- * Copyright (c) 2026, OpenLANPU Contributors
+ * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author                  Notes
- * 2026-10-26     OpenLANPU Contributors    preserve adjacent SMP user memory writes
+ * 2026-10-26     LoongsonLab               preserve adjacent SMP user memory writes
  */
 
 /*

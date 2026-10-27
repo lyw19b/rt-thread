@@ -8,7 +8,6 @@
  * 2025-03-10     LoongsonLab  the first version
  */
 
-
 #include "asm-generic.h"
 #include "regdef.h"
 

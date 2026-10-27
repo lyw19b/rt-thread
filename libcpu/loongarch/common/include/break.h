@@ -1,3 +1,18 @@
+/*
+ * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-27     LoongsonLab               standardize file header
+ */
+
+/*
+ * Description:
+ *   LoongArch break.
+ */
+
 #ifndef __UAPI_ASM_BREAK_H
 #define __UAPI_ASM_BREAK_H
 

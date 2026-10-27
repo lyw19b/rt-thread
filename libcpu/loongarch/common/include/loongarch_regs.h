@@ -3,15 +3,17 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Description: LoongArch CPU configuration and privileged register encodings.
- *              Detailed documents access website:
- *              https://loongson.cn
- *
  * Change Logs:
  * Date           Author       Notes
  * 2025-03-10     LoongsonLab  the first version
  * 2025-03-13     LoongsonLab  Add CSR operation
  * 2025-03-13     LoongsonLab  Add TLB Refill operations
+ */
+
+/*
+ * Description: LoongArch CPU configuration and privileged register encodings.
+ *              Detailed documents access website:
+ *              https://loongson.cn
  */
 
 #ifndef __LOONGARCH_REGS_H__

@@ -1,4 +1,10 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-27     LoongsonLab               standardize file header
+ */
+
 #include "stackframe.h"
 #include "asm-generic.h"
 

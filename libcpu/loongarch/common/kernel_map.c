@@ -5,7 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
- * 2026-10-24     OpenLANPU    Bootstrap the LS2K0300 kernel without DMW windows
+ * 2026-10-24     LoongsonLab               Bootstrap the LS2K0300 kernel without DMW windows
  */
 
 #include <rtconfig.h>

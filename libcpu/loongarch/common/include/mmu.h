@@ -7,7 +7,7 @@
  * Date           Author       Notes
  * 2025-03-10     LoongsonLab  the first version
  * 2025-03-16     LoongsonLab  add and fix page table attributes
- * 2026-10-23     OpenLANPU    Define read-only Smart user mappings
+ * 2026-10-23     LoongsonLab               Define read-only Smart user mappings
  */
 
 #ifndef _ASM_MMU_H

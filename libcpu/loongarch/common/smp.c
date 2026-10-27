@@ -1,7 +1,12 @@
 /*
  * Copyright (c) 2026, RT-Thread Development Team
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-27     LoongsonLab               standardize file header
  */
+
 #include <rthw.h>
 #include <rtthread.h>
 #include "loongarch.h"

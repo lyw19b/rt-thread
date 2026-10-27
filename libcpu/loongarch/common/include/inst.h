@@ -1,9 +1,25 @@
 /*
+ * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-27     LoongsonLab               standardize file header
+ */
+
+/*
+ * Description:
+ *   LoongArch inst.
+ */
+
+/*
  * LoongArch scalar memory instruction interface.
  *
  * Describes the scalar accesses supported by the RT-Thread emulator.
  * Effective addresses come from the caller; only opcode and Rd are decoded.
  */
+
 #ifndef __ASM_INST_H__
 #define __ASM_INST_H__
 

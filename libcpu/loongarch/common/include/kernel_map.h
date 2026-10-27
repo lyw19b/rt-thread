@@ -5,7 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
- * 2026-10-24     OpenLANPU    Define independent kernel RAM and device windows
+ * 2026-10-24     LoongsonLab               Define independent kernel RAM and device windows
  */
 
 #ifndef LOONGARCH_KERNEL_MAP_H__

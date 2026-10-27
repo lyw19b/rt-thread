@@ -9,7 +9,6 @@
  * 2025-03-13     LoongsonLab  version rollback
  */
 
-
 #define DBG_TAG "hw.backtrace"
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
