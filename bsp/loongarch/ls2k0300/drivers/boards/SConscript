@@ -1,0 +1,19 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               integrate isolated LS2K0300 BSP
+
+# Description:
+#   LS2K0300 development BSP: SConscript.
+
+from building import *
+
+cwd = GetCurrentDir()
+src = Glob('*.c')
+# The shared mach/common implementation owns LIOINTC initialization.
+SrcRemove(src, ['drv_interrupt.c'])
+group = DefineGroup('LS2K0300 board adaptation', src, depend=[''], CPPPATH=[cwd],
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+Return('group')

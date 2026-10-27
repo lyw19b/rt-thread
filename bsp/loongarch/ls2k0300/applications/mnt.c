@@ -1,7 +1,17 @@
 /*
  * Copyright (c) 2026, RT-Thread Development Team
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
  */
+
+/*
+ * Description:
+ *   LS2K0300 development BSP: mnt.
+ */
+
 #include <rtthread.h>
 #ifdef RT_USING_DFS_TMPFS
 #include <dfs_fs.h>
@@ -23,5 +33,6 @@ static int filesystem_init(void)
     }
     return RT_EOK;
 }
+
 INIT_ENV_EXPORT(filesystem_init);
 #endif

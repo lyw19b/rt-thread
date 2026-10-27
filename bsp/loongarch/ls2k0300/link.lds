@@ -1,4 +1,15 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ */
+
+/*
+ * Description:
+ *   LS2K0300 development BSP: link.
+ */
+
 INCLUDE "link_kmd.lds"
 MEMORY
 {

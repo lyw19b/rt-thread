@@ -1,3 +1,14 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               standardize file header
+
+# Description:
+#   LoongArch Kconfig.
+
 menu "RT-Thread LoongArch CPU"
 
     choice
@@ -9,7 +20,7 @@ menu "RT-Thread LoongArch CPU"
 
     config KMD_USE_PAGE
         bool "High-address kernel with 4 KiB page tables"
-        depends on RT_USING_SMART && SOC_LS2K0300
+        depends on RT_USING_SMART && BSP_LS2K0300
         help
             Build the kernel mappings before entering paged mode. All DMW
             windows remain disabled. Kernel RAM and devices use high virtual

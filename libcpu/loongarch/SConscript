@@ -1,22 +1,21 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               integrate isolated LS2K0300 BSP
+
+# Description:
+#   LS2K0300 development BSP: SConscript.
+
 # RT-Thread building script for bridge
 
 import os
 from building import *
 
-Import('rtconfig')
+group = SConscript(os.path.join('common', 'SConscript'))
 
-cwd   = GetCurrentDir()
-group = []
-list  = os.listdir(cwd)
-
-# add common code files
-group = group + SConscript(os.path.join('common', 'SConscript'))
-
-if GetDepend('SOC_LS2K1000LA') or GetDepend('SOC_LS2K0300'):
-    group += SConscript(os.path.join('ls2k', 'SConscript'))
-
-# # cpu porting code files
-# if rtconfig.CPU != 'common':
-#     group = group + SConscript(os.path.join(rtconfig.CPU, 'SConscript'))
+if GetDepend('BSP_LS2K1000LA') or GetDepend('BSP_LS2K0300'):
+    group = group + SConscript(os.path.join('mach', 'SConscript'))
 
 Return('group')

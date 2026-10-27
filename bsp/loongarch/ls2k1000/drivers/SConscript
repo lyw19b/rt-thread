@@ -1,3 +1,13 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               align board selection and build paths
+
+# Description:
+#   Build LS2K1000LA drivers and the shared USB implementation.
+
 from building import *
 import rtconfig
 
@@ -35,7 +45,7 @@ if GetDepend('BSP_USING_XINGYUN_TOUCH'):
                          depend=['BSP_USING_XINGYUN_TOUCH'], CPPPATH=paths)
 
 if GetDepend('BSP_USING_USB_HOST'):
-    shared = os.path.abspath(os.path.join(cwd, '..', '..', 'ls2k0300', 'drivers'))
+    shared = os.path.abspath(os.path.join(cwd, '..', '..', 'ls2k0300', 'drivers', 'usb'))
     usb = os.path.join(rtconfig.RTT_ROOT, 'components/drivers/usb/cherryusb')
     paths = [cwd, shared] + [os.path.join(usb, part) for part in
                             ('common', 'core', 'class/hub', 'class/msc')]

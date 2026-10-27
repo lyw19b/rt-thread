@@ -1,3 +1,13 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               integrate isolated LS2K0300 BSP
+
+# Description:
+#   LS2K0300 development BSP: SConscript.
+
 from building import *
 Import('RTT_ROOT')
 
@@ -5,6 +15,8 @@ Import('RTT_ROOT')
 VariantDir('port_tests', os.path.join(RTT_ROOT, 'examples/test'), duplicate=0)
 
 src = Glob('*.c')
+# The reference demo defines a second board init and main; use this BSP runtime.
+SrcRemove(src, ['main_lwip_demo.c'])
 if GetDepend('BSP_USING_SELFTEST'):
     src += ['port_tests/loongarch_ale_test.c']
     src += ['port_tests/loongarch_kernel_test.c', 'port_tests/loongarch_smp_test.c']

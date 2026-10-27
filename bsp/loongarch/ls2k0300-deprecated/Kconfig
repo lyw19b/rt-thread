@@ -1,0 +1,167 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               align board selection and build paths
+
+# Description:
+#   Compatibility configuration for the archived LS2K0300 BSP.
+
+mainmenu "RT-Thread LS2K0300 Configuration"
+BSP_DIR := .
+RTT_DIR := ../../..
+PKGS_DIR := packages
+config RT_CPUS_NR
+    default 1 if RT_USING_SMP
+    range 1 1 if RT_USING_SMP
+
+source "$(RTT_DIR)/Kconfig"
+osource "$PKGS_DIR/Kconfig"
+
+config BSP_LS2K0300
+    bool
+    default y
+    select ARCH_LOONGARCH64
+    select ARCH_LOONGARCH_FPU
+    select RT_USING_COMPONENTS_INIT
+    select RT_USING_USER_MAIN
+    select RT_USING_CACHE
+    select ARCH_MM_MMU if RT_USING_SMART
+    select ARCH_REMAP_KERNEL if RT_USING_SMART
+
+config __STACKSIZE__
+    int "Boot and interrupt stack size"
+    default 8192
+
+config BSP_UART_INDEX
+    int "Console UART index"
+    range 0 9
+    default 0
+    help
+        Uses the firmware pin mux. Match the UART wired to the debug connector.
+
+config BSP_UART_CLOCK_HZ
+    int "UART input clock override (0 reads the clock registers)"
+    range 0 500000000
+    default 0
+
+config BSP_USING_LS2K0300_QEMU
+    bool "Standalone ls2k0300 QEMU direct-kernel boot"
+    default n
+    help
+        Select only for the external ls2k0300 machine, not novae_2k0302.
+        Its LIOINTC requires the CPU0 route bit. Supply USB clock/reset
+        state normally provided by firmware, without changing the emulator.
+        This machine has LCD scanout but no Novae accelerator or touch model.
+        Physical board defaults and firmware requirements remain unchanged.
+
+config BSP_RAM_END
+    hex "End of usable low DDR (physical address)"
+    range 0x4000000 0xff00000
+    default 0x8000000
+    help
+        The default uses the first 128 MiB only. Reserve firmware memory by
+        lowering this boundary. The DDR controller window at 0x0ff00000 is
+        excluded even when firmware leaves it enabled.
+
+config BSP_USING_VANGUARD_TOUCH
+    bool "Vanguard Pi I2C0 GT9147 touch wiring"
+    depends on LAXPU_USING_DISPLAY
+    default y if BSP_USING_LS2K0300_QEMU
+    default n
+    help
+        Use I2C0 at 0x16108000 with the DTS 200 MHz input clock, address
+        0x14, GPIO42 INT and GPIO55 RESET. Configure G48/G49 as I2C0.
+        GPIO32..47 share LIOINTC IRQ55, owned here by the touch adapter.
+        Preserve the panel's existing 1024x600/falling-edge configuration.
+        Enable on physical Vanguard boards; leave off for the legacy
+        novae_2k0302 virtual GT911 at 0x5d/IRQ62. A QEMU without a touch
+        model will report probe failure, while optional-touch UI can run.
+
+config BSP_USING_HUMMINGBIRD
+    bool "Hummingbird LS2K300-MINI-DP physical LCD and I2C1 touch"
+    depends on LAXPU_USING_DISPLAY && !BSP_USING_VANGUARD_TOUCH && !BSP_USING_LS2K0300_QEMU
+    default n
+    help
+        Use ls2k300_mini_dp.dts geometry with the tested 45 MHz ATK panel
+        clock, GPIO84 backlight,
+        I2C1 on GPIO50/51 and GT911/GT9147 INT on GPIO82 (LIOINTC IRQ58).
+        This standard SoC board does not contain the project Novae accelerator.
+
+config BSP_USING_SELFTEST
+    bool "Build kernel port regression and stress commands"
+    default n
+
+source "$(RTT_DIR)/bsp/loongarch/common/gmac/Kconfig"
+
+menuconfig BSP_USING_SDIO
+    bool "LS2K0300 SD memory card (SDIO 1.2)"
+    depends on !RT_USING_NANO
+    select RT_USING_SDIO
+    select RT_USING_MUTEX
+    select RT_USING_SEMAPHORE
+    default n
+    help
+        Native SD memory host with bounded DMA and dedicated uncached storage.
+        Firmware must supply 3.3 V card power. Insert the card before boot.
+        SDIO function devices, UHS, eMMC DDR and hot removal are not supported.
+
+if BSP_USING_SDIO
+    config BSP_SDIO_PORT
+        int "SDIO controller index"
+        range 0 1
+        default 0
+
+    config BSP_SDIO_ROOT_CLOCK_HZ
+        int "DEVICE clock before SDIO division (0 reads PLL registers)"
+        range 0 500000000
+        default 0
+        help
+            This is the clock BEFORE the shared SDIO divider at 0x16000420.
+            The driver raises the divider if needed for <=400 kHz card setup.
+            It refuses to change the divider while the other port is clocked.
+
+    config BSP_SDIO_MAX_CLOCK_HZ
+        int "Maximum SD card clock (Hz)"
+        range 400000 25000000
+        default 25000000
+
+    config BSP_SDIO_USING_FILE_TEST
+        bool "Build sd_filetest filesystem round-trip diagnostic"
+        depends on RT_USING_FINSH && RT_USING_POSIX_FS
+        default n
+endif
+
+menuconfig BSP_USING_USB_HOST
+    bool "LS2K0300 EHCI high-speed USB host and mass storage"
+    default n
+    depends on !RT_USING_CHERRYUSB
+    select RT_USING_MUTEX
+    select RT_USING_SEMAPHORE
+    select RT_USING_MESSAGEQUEUE
+    select RT_USING_TIMER_SOFT
+    select RT_USING_DFS
+    select RT_USING_DFS_ELMFAT
+    help
+        Board-owned EHCI HCD with unchanged CherryUSB core/hub/MSC sources.
+        High-speed USB disks may attach directly or through one high-speed hub.
+        Firmware must supply VBUS, PHY reference clock and release USB reset.
+        OHCI low/full-speed devices, OTG and HID are not enabled.
+        DMA uses dedicated uncached physical memory in both DMW and PAGE modes.
+
+config BSP_USING_USB_CAMERA
+    bool "OpenLANPU UVC camera (Vanguard high-speed USB Host)"
+    depends on BSP_USING_USB_HOST && RT_USING_SMART && RT_USING_DFS_V2
+    depends on RT_USING_DFS_DEVFS && RT_USING_POSIX_DEVIO && RT_USING_POSIX_POLL
+    depends on RT_TICK_PER_SECOND >= 1000
+    default n
+    help
+        Project-owned UVC 1.0/1.1/1.5 MJPEG and YUYV capture via /dev/video0.
+        Supports one high-speed isochronous IN (bInterval 1..4) or Bulk IN
+        stream. Uses bounded, permanent uncached DMA and copied frame rings.
+        Firmware must enable the board USB Host PHY and VBUS.
+
+source "$(RTT_DIR)/../../driver/rtos/Kconfig"
+
+source "$(RTT_DIR)/../../display/systemui/Kconfig"

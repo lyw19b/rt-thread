@@ -1,0 +1,24 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               integrate isolated LS2K0300 BSP
+
+# Description:
+#   Loongson platform definitions and initialization.
+
+import os
+from building import *
+
+cwd = GetCurrentDir()
+group = SConscript(os.path.join('common', 'SConscript'))
+
+if GetDepend('BSP_LS2K0300'):
+    group = group + DefineGroup('Loongson peripheral definitions', [],
+                                depend=['BSP_LS2K0300'],
+                                CPPPATH=[cwd + '/include/ls2k0300'])
+
+# Firmware owns DDR/PLL initialization. Cold-boot reference assembly in
+# ls2k0300/ is not part of the RAM-resident kernel build.
+Return('group')

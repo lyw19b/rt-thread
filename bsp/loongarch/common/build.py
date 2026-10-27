@@ -1,3 +1,13 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               align board selection and build paths
+
+# Description:
+#   Build LoongArch BSP images using the selected board mapping.
+
 import os
 import sys
 import rtconfig
@@ -35,7 +45,7 @@ if GetDepend('__STACKSIZE__'):
 with open('link_stacksize.lds', 'w') as stack_lds:
     stack_lds.write('__STACKSIZE__ = %d;\n' % stack_size)
 
-if GetDepend('SOC_LS2K0300'):
+if GetDepend('BSP_LS2K0300'):
     paged = bool(GetDepend('KMD_USE_PAGE'))
     virtual_base = 0xffffffe000000000 if paged else 0x9000000000000000
     with open('link_kmd.lds', 'w') as mapping_lds:

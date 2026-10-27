@@ -5,13 +5,19 @@
  *
  * Change Logs:
  * Date           Author       Notes
- * 2026-10-23     OpenLANPU    Add an isolated procfs SMP diagnostic
+ * 2026-10-23     LoongsonLab               Add an isolated procfs SMP diagnostic
+ * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ */
+
+/*
+ * Description:
+ *   LS2K0300 development BSP: procfs smp probe.
  */
 
 #include <rtthread.h>
 
-#if defined(BSP_USING_SELFTEST) && defined(RT_USING_SMP) && \
-    defined(RT_USING_DFS_PROCFS) && RT_CPUS_NR > 1
+#if defined(BSP_USING_SELFTEST) && defined(RT_USING_SMP) && defined(RT_USING_DFS_PROCFS) && \
+    RT_CPUS_NR > 1
 
 #include <proc.h>
 #include <rthw.h>
@@ -70,8 +76,7 @@ static void probe_create(void *parameter)
         struct proc_dentry *entry;
         char name[24];
 
-        while (iteration - __atomic_load_n(&probe_tail, __ATOMIC_ACQUIRE) >=
-               PROC_PROBE_QUEUE_SIZE)
+        while (iteration - __atomic_load_n(&probe_tail, __ATOMIC_ACQUIRE) >= PROC_PROBE_QUEUE_SIZE)
         {
             rt_thread_mdelay(1);
         }
@@ -178,8 +183,8 @@ static int procfs_smp_probe(int argc, char **argv)
 
     rt_thread_control(producer, RT_THREAD_CTRL_BIND_CPU, (void *)0);
     rt_thread_control(consumer, RT_THREAD_CTRL_BIND_CPU, (void *)1);
-    rt_kprintf("PROCFS SMP PROBE: start rounds=%u serialized=%u cpus=0,1\n",
-               rounds, probe_serialized);
+    rt_kprintf("PROCFS SMP PROBE: start rounds=%u serialized=%u cpus=0,1\n", rounds,
+               probe_serialized);
     rt_thread_startup(producer);
     rt_thread_startup(consumer);
 
@@ -187,10 +192,11 @@ static int procfs_smp_probe(int argc, char **argv)
     {
         if (rt_sem_take(&probe_done, 30 * RT_TICK_PER_SECOND) != RT_EOK)
         {
-            rt_kprintf("PROCFS SMP PROBE: TIMEOUT created=%u removed=%u ready=0x%x; reboot required\n",
-                       __atomic_load_n(&probe_head, __ATOMIC_ACQUIRE),
-                       __atomic_load_n(&probe_tail, __ATOMIC_ACQUIRE),
-                       __atomic_load_n(&probe_ready, __ATOMIC_ACQUIRE));
+            rt_kprintf(
+                "PROCFS SMP PROBE: TIMEOUT created=%u removed=%u ready=0x%x; reboot required\n",
+                __atomic_load_n(&probe_head, __ATOMIC_ACQUIRE),
+                __atomic_load_n(&probe_tail, __ATOMIC_ACQUIRE),
+                __atomic_load_n(&probe_ready, __ATOMIC_ACQUIRE));
             return -RT_ETIMEOUT;
         }
     }

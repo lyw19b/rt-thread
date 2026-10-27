@@ -1,3 +1,13 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               align board selection and build paths
+
+# Description:
+#   Configure the LS2K1000LA board.
+
 mainmenu "RT-Thread Project Configuration"
 
 BSP_DIR := .
@@ -13,7 +23,7 @@ config RT_CPUS_NR
 source "$(RTT_DIR)/Kconfig"
 osource "$PKGS_DIR/Kconfig"
 
-config SOC_LS2K1000LA
+config BSP_LS2K1000LA
     bool
     select ARCH_LOONGARCH64
     select RT_USING_COMPONENTS_INIT

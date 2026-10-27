@@ -1,7 +1,12 @@
 /*
  * Copyright (c) 2026, RT-Thread Development Team
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-27     LoongsonLab               standardize file header
  */
+
 #include <rtthread.h>
 #include <rthw.h>
 #ifndef RT_USING_NANO

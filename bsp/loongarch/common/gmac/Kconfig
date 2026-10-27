@@ -1,8 +1,18 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               align board selection and build paths
+
+# Description:
+#   Configure the shared LoongArch GMAC drivers.
+
 menuconfig BSP_USING_GMAC
     bool "LS2K Ethernet"
     depends on RT_USING_LWIP && !LWIP_NO_RX_THREAD
     depends on !RT_USING_NANO
-    depends on !RT_USING_SMART || SOC_LS2K0300 || SOC_LS2K1000LA
+    depends on !RT_USING_SMART || BSP_LS2K0300 || BSP_LS2K1000LA
     select RT_USING_DEVICE_OPS
     select RT_USING_MUTEX
     default n

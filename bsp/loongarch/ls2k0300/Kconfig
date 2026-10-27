@@ -1,4 +1,15 @@
-mainmenu "RT-Thread LS2K0300 Configuration"
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-27     LoongsonLab               standardize file header
+
+# Description:
+#   LS2K0300 development BSP Kconfig.
+
+mainmenu "RT-Thread LS2K0300 development board Configuration"
 BSP_DIR := .
 RTT_DIR := ../../..
 PKGS_DIR := packages
@@ -9,7 +20,7 @@ config RT_CPUS_NR
 source "$(RTT_DIR)/Kconfig"
 osource "$PKGS_DIR/Kconfig"
 
-config SOC_LS2K0300
+config BSP_LS2K0300
     bool
     default y
     select ARCH_LOONGARCH64
@@ -155,3 +166,77 @@ config BSP_USING_USB_CAMERA
 source "$(RTT_DIR)/../../driver/rtos/Kconfig"
 
 source "$(RTT_DIR)/../../display/systemui/Kconfig"
+
+menu "Imported LS2K0300 peripherals"
+
+config BSP_DEV_GPIO
+    bool "LS2K0300 GPIO driver"
+    select RT_USING_PIN
+    default n
+
+config BSP_DEV_ADC
+    bool "LS2K0300 ADC driver"
+    select RT_USING_ADC
+    select RT_USING_MUTEX
+    default n
+
+config BSP_DEV_I2C
+    bool "LS2K0300 I2C driver"
+    select RT_USING_I2C
+    default n
+    depends on !BSP_USING_VANGUARD_TOUCH && !BSP_USING_HUMMINGBIRD
+
+config BSP_DEV_PWM
+    bool "LS2K0300 PWM driver"
+    select RT_USING_PWM
+    default n
+
+config BSP_DEV_RTC
+    bool "LS2K0300 RTC driver"
+    depends on RT_USING_RTC && !RT_USING_SOFT_RTC
+    default n
+
+config BSP_DEV_SPI
+    bool "LS2K0300 SPI driver"
+    select RT_USING_SPI
+    select RT_USING_PIN
+    default n
+
+config BSP_DEV_THERMAL
+    bool "LS2K0300 THERMAL driver"
+    select RT_USING_SENSOR
+    default n
+
+config BSP_DEV_WDT
+    bool "LS2K0300 WDT driver"
+    select RT_USING_WDT
+    default n
+
+config BSP_DEV_SSD1306
+    bool "LS2K0300 SSD1306 driver"
+    select RT_USING_I2C
+    default n
+    depends on BSP_DEV_I2C
+    select BSP_USING_I2C1
+
+config BSP_USING_I2C0
+    bool "Register I2C0 (firmware must configure its pins)"
+    depends on BSP_DEV_I2C
+    default n
+
+config BSP_USING_I2C1
+    bool "Register I2C1 (firmware must configure its pins)"
+    depends on BSP_DEV_I2C
+    default n
+
+config BSP_USING_I2C2
+    bool "Register I2C2 (firmware must configure its pins)"
+    depends on BSP_DEV_I2C
+    default n
+
+config BSP_USING_I2C3
+    bool "Register I2C3 (firmware must configure its pins)"
+    depends on BSP_DEV_I2C
+    default n
+
+endmenu
