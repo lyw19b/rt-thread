@@ -14,6 +14,7 @@
 #include "rttypes.h"
 #include <rtthread.h>
 #include <rthw.h>
+
 #ifdef RT_USING_SMART
 #include <mmu.h>
 #endif
@@ -29,9 +30,11 @@
 #include "kernel_map.h"
 #include "stack.h"
 #include "timer.h"
+
 #ifdef RT_USING_SMART
 #include "tlb.h"
 #endif
+
 #include "break.h"
 #include "inst.h"
 
