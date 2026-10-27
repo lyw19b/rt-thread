@@ -70,7 +70,8 @@ NVMe 支持 64 位 DMA，当前低 DDR 地址是独立保留区的位置，不�
 - 原生以太网收发、PHY：已接入但待实板验证。MSI/路由尚未接入。
 - 原生 USB xHCI HCD 和设备类：尚未接入此 BSP。
 - eMMC/SD 已接入但仍需确认输入时钟及 ACPI 资源，再做实板读写验证。
-- SATA SSD、原生显示控制、RTC/GPIO/I2C/电源管理：尚未接入此 BSP。
+- SATA SSD、原生显示控制、完整电源管理：尚未接入此 BSP。
+- SPI/I2C/RTC/GPIO/PWM/看门狗及 HPET 计数接口已接入，实板验证边界见下文。
 - NovaUIOS 已完成单缓冲适配及通用 QEMU 八核运行。实板扩展内存版 EFI
   停在固件 CODE 92，原因未确认，不能计为 NovaUIOS 实板启动通过。
 - 已通过实板的是旧 v2/64 MiB 内核；当前 v3/224 MiB 内存申请待实板确认。
@@ -248,3 +249,171 @@ SD 应在启动前插入；空主机可用 ls2k3000_mmc_rescan <索引> 重新�
 ls2k3000_mmc_status 输出每个主机的卡状态、频率、位宽、请求/错误及最后命令。
 BSP_LS2K3000_MMC_ALLOW_WRITE 默认 n；确认目标与备份之后再启用写入验证。
 电源、引脚复用和电压暂由固件设置，不能把 eMMC 8 位能力当作 SD 8 位能力。
+
+
+低速外设补充（2026-10-28）
+-------------------------
+本次新增代码只位于本 BSP 和 examples/test，不修改公共驱动框架、内核、
+libcpu 或 QEMU。寄存器操作按芯片手册实现，硬件引擎与 RT-Thread 适配层分离，
+同一份引擎代码可在主机故障模型与目标内核中执行。
+
+参考资料：
+- boards/2k3000 中《龙芯 2K3000/3B6000M 处理器用户手册 V1.0》：
+  SPI 第 10 章、I2C 第 17 章、PWM 第 18 章、HPET 第 19 章、GPIO 第 20 章、
+  看门狗第 22 章、RTC 第 23 章。
+- 项目 U-Boot 的 2K3000 适配用于交叉核对资源关系，不直接引入其驱动框架。
+- UEFI 交接提供 PCI BAR；手册提供 BAR 内偏移，不能用 2K0300 的固定地址替代。
+
+目录与资源：
+  drivers/boards/periph_io.h          可注入的寄存器与单调时钟接口
+  drivers/boards/periph_resource.*    PCI BAR 校验、非缓存映射、错误码转换
+  drivers/i2c/                       I2C0/1 固定地址，I2C2/3 APB 相对地址
+  drivers/spi/                       SPI0 固定地址，SPI1 独立 PCI BAR
+  drivers/rtc/                       TOY RTC 日历与 RT-Thread rtc 设备
+  drivers/gpio/                      按字节访问的 GPIO pin 设备
+  drivers/pwm/                       四路 PWM，注册为 pwm0
+  drivers/timer/                     只读 HPET 计数设备 hpet0
+  drivers/power/                     wdt0；原有 reboot 继续保留
+
+资源地址：
+  I2C0       0x1fe00120，100 MHz 输入
+  I2C1       0x1fe00130，100 MHz 输入
+  I2C2/3     APB BAR0 + 0x10000 / 0x10100，48 MHz 输入
+  SPI0       0x1fe001f0
+  SPI1       0014:7a1b 的 BAR0，寄存器窗口至少 0x10 字节
+  PWM        APB BAR0 + 0x20000，4 路，步长 0x100，48 MHz
+  HPET       APB BAR0 + 0x40000
+  看门狗     APB BAR0 + 0x50030，50 MHz
+  RTC        APB BAR0 + 0x50100
+  GPIO       APB BAR0 + 0x60000
+  APB        PCI 0014:7a42，窗口 0x80000 字节
+
+映射必须通过已有 PCI ID、BAR 地址/长度、地址上限和 Memory Enable 检查。
+没有固件资源时返回错误，不猜测 APB 地址、不写全 1 探测 BAR、不重新分配资源。
+超时使用 CPUCFG4/5 与 RDTIME 恒定计数器，不依赖系统 tick 中断推进。
+固件须预先配置设备时钟、供电、ACPI_EN 与引脚复用。注册不改 PAD_SEL。
+
+功能与限制：
+1. I2C 注册 i2c0..i2c3；默认掩码 0x3，仅启用 I2C0/1。
+   默认 100 kHz，支持不超过 400 kHz 的 7 位主机传输。
+   消息数组内部使用 repeated START；最后一个读取字节发送 NACK，末尾 STOP。
+   传输前验证整个消息数组，不支持的 flag 或地址不会产生部分总线操作。
+   NACK、仲裁丢失、TIP 超时和 STOP 超时均可返回；仲裁丢失不抢发 STOP。
+   每阶段等待上限 10 ms；BUSY 未释放不会无限等待。
+   RT-Thread 总线互斥锁串行化同一控制器，允许不同控制器并行。
+   不支持 10 位地址、从机模式、GPIO 九脉冲恢复或自动总线扫描。
+
+2. SPI 注册 spi0/spi1，以及每个总线的 spi0cs0..spi0cs3 / spi1cs0..spi1cs3。
+   支持 8 位、MSB-first、模式 0..3、原生低有效片选；不支持 QSPI、DMA 或 GPIO CS。
+   BSP_LS2K3000_SPI_INPUT_HZ 默认 100000000，实板必须核对输入时钟。
+   分频选择保证实际 SCK 不超过请求值；过低、无法表示的频率返回错误。
+   每字节 TX/RX 等待上限 10 ms，错误时释放片选并恢复固件寄存器。
+   cs_take 保存 control/ext/parameter/CS，cs_release 恢复；不改 TIMING。
+   多消息片选链应通过 rt_spi_transfer_message 等带锁 API 完整提交，
+   应用不能留下未释放的片选链，也不能在其他线程传输时修改同一设备配置。
+   只支持线程上下文；调用期间不得执行 SPI0 XIP 上的代码。
+   仅注册 SPI 总线和设备，不自动注册可擦写固件块设备或挂载文件系统。
+
+3. RTC 注册 rtc，支持 GET/SET_TIME、GET/SET_TIMEVAL，采用 UTC 秒和 100 ms 精度。
+   TOY 年字段沿用固件/Linux 的 year - 1900 约定，支持 1970..9999。
+   校验月份、闰年、日期及时间范围；读低字/年/低字处理跨秒、跨年撕裂。
+   SET 写年前后检查异步写状态，等待上限 100 ms；多核读写由互斥锁保护。
+   注册和打开不修改电池时间、不重置晶振或 trim；固件未使能时返回错误。
+   硬件 RTC 与 RT_USING_SOFT_RTC 不能同时启用；构建工具会关闭软件 RTC。
+   尚不支持闹钟、唤醒、RTC 中断，也不自动同步主机时间。
+
+4. 定时器分两层：已有 CPU 恒定计数器负责各核 tick、延时和内核定时器；
+   新增 HPET 仅提供 64 位硬件计数读取与飞秒周期查询。
+   rt_device_read(hpet0, 0, &ticks, sizeof(ticks)) 返回 8 字节。
+   控制命令 LS2K3000_HPET_GET_PERIOD 定义于 drivers/timer/hpet_counter.h，
+   参数为 uint32_t *，得到每 tick 的飞秒数，不硬编码频率代替硬件能力。
+   高/低/高读取处理 32 位进位；最多尝试 8 次。
+   固件未启用主计数器时读取返回错误；不重置/启用继承的比较器。
+   当前没有外设中断路由，因此不注册具有回调能力的 rt_hwtimer，
+   HPET 比较器/周期中断仍是后续工作，不能用轮询线程冒充硬件中断。
+
+5. GPIO 注册 pin，支持编号 0..39、46..63 的输入/推挽输出与电平读写。
+   40..45 为保留编号；不支持的编号和模式返回错误或设置线程 errno。
+   使用每引脚独立字节寄存器，不做跨核容易丢失的整组读改写。
+   可先 rt_pin_write 预置输出锁存，再 rt_pin_mode 切换输出。
+   不实现中断、上下拉、去抖、开漏或自动引脚复用。
+
+6. PWM 注册 pwm0，使用非负通道编号 0..3。
+   支持 PWM_CMD_SET/GET/ENABLE/DISABLE；单位为纳秒。
+   设置前关闭并复位计数，写 low/full 后恢复启停状态，不自动开启输出。
+   不接管处于捕获/中断/反相/死区模式的通道；不支持互补通道、0/100% 占空比。
+   周期会量化到 48 MHz 时钟，GET 返回实际寄存器对应的时间。
+   需由板级接线和固件 pin mux 决定对应物理引脚。
+
+7. 看门狗注册 wdt0，支持 1..85 秒、GET/SET_TIMEOUT、KEEPALIVE、START、STOP。
+   注册与打开都不启动、停止或喂狗；固件已经启用的看门狗状态被保留。
+   运行中显式调整超时时间会重新装载计数；GET_TIMELEFT 不支持。
+   RST_CNT[0] 是立即复位位，启停只写明确值 2/0，不回写读到的复位位。
+   RT-Thread 的公共看门狗 close 会调用 STOP，应用关闭设备也属于显式停止。
+   未进行任何会让真实板卡自动复位的验证。
+
+构建（从 RT-Thread 仓库根目录执行，产物放源代码树以外）：
+  python3 bsp/loongarch/ls2k3000/tools/build_kernel.py \
+    --profile smart_smp --peripherals \
+    --toolchain /path/to/loongarch64-linux-musl/bin \
+    --output /tmp/ls2k3000-peripherals \
+    --test-source examples/test/ls2k3000_periph_test.c
+
+--peripherals 开启上述七组 Kconfig 选项并关闭软件 RTC。
+默认 defconfig 没有强制启用这些新外设，已有启动行为不变。
+--nvme --mmc --network 可以同时启用已有驱动，MMC 输入时钟仍需单独核实。
+构建快照、rtconfig.h、ELF、EFI、日志、result.json 不提交到仓库。
+
+保留的测试与复现：
+  python3 examples/test/ls2k3000_periph_host.py
+    使用 ASan/UBSan 编译实际硬件引擎；133 项检查通过。
+    覆盖分频、重复起始、NACK/仲裁丢失/超时、失败后恢复、片选链与固件寄存器
+    恢复、日历/闰年/跨年、RTC 写超时、HPET 进位/禁用、PWM 占空比范围和
+    看门狗最大计数/复位位隔离。寄存器模型不是物理电气验证。
+
+  ls2k3000_periph_test（目标系统 msh 命令）
+    读取 RTC，并等待确认递增；读取 SPI0/1 CS0 JEDEC ID；读取 I2C0 0x50 SPD。
+    SPD 操作只有地址指针设置和数据读取，不写 EEPROM 数据。
+    验证非法 I2C 地址被拒绝；不可用设备明确打印 UNAVAILABLE。
+    该命令针对本板与模型的连接，移植到其他板前应核对 0x50 外设用途。
+
+  ls2k3000_periph_stress（目标系统 msh 命令）
+    4 个线程同时访问同一 SPI0、I2C0 和 RTC，32 轮/线程，共 128 轮。
+    不做 Flash 擦写、RTC 校时、看门狗启动、PWM 输出或 GPIO 电平变更。
+
+  python3 examples/test/ls2k3000_periph_model.py \
+    --qemu /path/to/qemu-system-loongarch64 \
+    --kernel /tmp/ls2k3000-peripherals/rt-thread/bsp/loongarch/ls2k3000/rtthread.bin \
+    --toolchain /path/to/loongarch64-linux-musl/bin \
+    --cpus 8 --output /tmp/ls2k3000-model-test
+    在既有 -M ls2k3000 上使用合成内存/PCI 交接与独立启动入口。
+    测试入口设置两个 PCI BAR 与 RTC 使能，并提供次核 mailbox 等待逻辑。
+    只用于模型测试，绝不可当作真实开发板加载器。没有运行 UEFI。
+    2026-10-28：8 核上线；SPI0/1 ID=ef4017；SPD=23110c02；RTC 递增；
+    passed=5 unavailable=0；并发 workers=4 rounds=128 errors=0。
+    临时 SPI 文件校验不变。HPET/GPIO/PWM/看门狗的完整硬件模型尚不存在，
+    不将这些设备的注册或主机寄存器测试宣称为原生模型功能验证。
+
+  python3 examples/test/ls2k3000_periph_qemu.py --help
+    保留完整 UEFI 路径测试器：真实参考 FD + 临时 SATA EFI 文件系统 + RT 内核。
+    --image 为 build_uefi.py 的输出；--kernel-cpus 8 --stress 用于八核并发测试。
+    不修改参考 FD 文件，使用 QEMU 快照磁盘。
+
+已通过的构建/运行组合：
+- 标准单核 + 全部低速外设：编译通过。
+- Smart 单核原始配置（新外设关闭、保留软件 RTC）：编译通过。
+- Smart 八核 + 全部低速外设 + GMAC/NVMe/SD/eMMC：编译通过。
+- Smart 八核 + 全部低速外设：原生模型独立入口收发与并发检查通过。
+- 通用 virt 的 Smart 八核内存/锁/timer 回归：256 轮/核，共 2048，PASS。
+  virt 使用合成交接，不含 2K3000 的真实外设或 EFI。
+
+本次确认的既有 UEFI 启动限制（未解决，不能算作通过）：
+参考 X2K30B0 固件在模型上拒绝当前 v3 加载器的 224 MiB 固定区间申请：
+  ConvertPages: range 2000000 - FFFFFFF covers multiple entries
+  Kernel arena unavailable; firmware memory preserved.
+  Error: Image ... start failed: Not Found
+标准与 Smart 镜像都在进入内核之前返回固件。因此无法从这次结果推断新驱动
+在完整 UEFI 启动后的行为，也不能将独立入口测试称为修复了此内存分配问题。
+需要进一步核对该固件内存图与项目内存布局；不能简单覆盖固件保留页以绕过检查。
+实板的引脚复用、SPI/I2C 波形、RTC 电池保持、PWM 输出、GPIO 电平、看门狗复位、
+HPET 中断路由仍待后续验证；本次没有连接或修改真实开发板固件。
