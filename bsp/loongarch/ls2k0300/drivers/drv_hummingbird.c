@@ -6,6 +6,7 @@
  * Change Logs:
  * Date           Author                  Notes
  * 2026-10-26     OpenLANPU Contributors    adapt ls2k300_mini_dp.dts LCD and touch
+ * 2026-10-26     OpenLANPU Contributors    establish the complete display clock path
  *
  * Description:
  *   Configure the Hummingbird 1024x600 panel, GPIO84 backlight and I2C1 GT9xx.
@@ -20,6 +21,7 @@
 #include "platform_interrupt.h"
 
 #ifdef BSP_USING_HUMMINGBIRD
+#include "hummingbird_panel.h"
 #include <drivers/dev_pin.h>
 /* The pinned graphics header contains no-op inlines with unused arguments. */
 #pragma GCC diagnostic push
@@ -43,9 +45,16 @@
 #define TOUCH_IRQ       58
 #define BACKLIGHT_PIN   84
 #define PIXEL_PLL       0x16000410UL
+#define PIXEL_SCALE     0x16000420UL
+#define CLOCK_ENABLE    0x16000424UL
+#define PIXEL_ENABLE    (1U << 6)
+#define GMAC_NODE_CLOCK (1U << 8)
+#define LCD_CONTROL     0x16091240UL
+#define LCD_OUTPUT      (1U << 8)
 #define CHIP_CONFIG3    0x1600010cUL
 #define DC_COHERENT     ((1U << 12) | (1U << 4))
-#define PIXEL_PARAMETERS ((32U << 24) | (72U << 15) | (6U << 8))
+#define PIXEL_PARAMETERS HB_PANEL_PLL_PARAMETERS
+#define CHIP_CONFIG4    0x16000110UL
 
 static unsigned int touch_interrupts;
 
@@ -92,19 +101,35 @@ static int pixel_clock_prepare(void)
 {
     rt_ubase_t reg = LS2K_UNCACHED(PIXEL_PLL);
     rt_uint32_t value = HWREG32(reg);
+    rt_bool_t configured = (value & 0x7fffff00U) == PIXEL_PARAMETERS &&
+                           (value & 0xb9U) == 0x89U;
+    rt_base_t level;
     unsigned int wait;
 
-    /* SYSCLK is 120 MHz. The supplied ATK-MD0700R-1024600 F429 example
-     * uses 45 MHz, reproduced here as 120 / 6 * 72 / 32 MHz. This board
-     * showed stable bars at 45 MHz after corruption at the DTS's 51.2 MHz;
-     * keep its geometry but use the verified board/panel clock. */
-    if ((value & 0x7fffff00U) == PIXEL_PARAMETERS &&
-        (value & 0xb1U) == 0x81U)
+    /* PIX PLL also supplies the GMAC backup clock. Retuning its VCO while
+     * GMAC selects that source would change the network clock as well. */
+    if (!configured && !(HWREG32(LS2K_UNCACHED(CLOCK_ENABLE)) & GMAC_NODE_CLOCK))
     {
-        return RT_EOK;
+        rt_kprintf("Hummingbird LCD: PIX PLL is in use by GMAC backup clock\n");
+        return -RT_EBUSY;
     }
 
-    HWREG32(LS2K_UNCACHED(0x16091240UL)) &= ~(1U << 8);
+    /* Quiesce scanout even when the PLL already matches. Firmware may have
+     * left output enabled; pinmux and timing must not change during scanout. */
+    HWREG32(LS2K_UNCACHED(LCD_CONTROL)) &= ~LCD_OUTPUT;
+    rt_hw_dmb();
+    level = rt_hw_interrupt_disable();
+    HWREG32(LS2K_UNCACHED(CLOCK_ENABLE)) &= ~PIXEL_ENABLE;
+    rt_hw_dmb();
+    rt_hw_interrupt_enable(level);
+
+    /* Use the explicit board/panel working point. Stable wide color bars
+     * do not establish fine-detail optical acceptance; see the profile. */
+    if (configured)
+    {
+        goto enable_pixel_clock;
+    }
+
     HWREG32(reg) = value & ~1U;
     rt_hw_dmb();
     HWREG32(reg) = (value & ~1U) | (1U << 4) | (1U << 3) | (1U << 5);
@@ -122,7 +147,7 @@ static int pixel_clock_prepare(void)
         {
             HWREG32(reg) |= 1U;
             rt_hw_dmb();
-            return RT_EOK;
+            goto enable_pixel_clock;
         }
 
         rt_thread_mdelay(1);
@@ -130,18 +155,63 @@ static int pixel_clock_prepare(void)
 
     rt_kprintf("Hummingbird LCD: pixel PLL lock timeout\n");
     return -RT_ETIMEOUT;
+
+enable_pixel_clock:
+    /* PLL lock is insufficient: the downstream divider and gate are separate
+     * registers. Manual 3.4.29: mode 0, scale 7 is an undivided pixel clock.
+     * Preserve every other peripheral's divider, gate and source selection. */
+    level = rt_hw_interrupt_disable();
+    HWREG32(LS2K_UNCACHED(PIXEL_SCALE)) =
+        (HWREG32(LS2K_UNCACHED(PIXEL_SCALE)) & ~0xf0U) | 0x70U;
+    HWREG32(LS2K_UNCACHED(CLOCK_ENABLE)) |= PIXEL_ENABLE;
+    rt_hw_dmb();
+
+    if ((HWREG32(reg) & 0x7fffffb9U) != (PIXEL_PARAMETERS | 0x89U) ||
+        (HWREG32(LS2K_UNCACHED(PIXEL_SCALE)) & 0xf0U) != 0x70U ||
+        !(HWREG32(LS2K_UNCACHED(CLOCK_ENABLE)) & PIXEL_ENABLE))
+    {
+        HWREG32(LS2K_UNCACHED(CLOCK_ENABLE)) &= ~PIXEL_ENABLE;
+        rt_hw_dmb();
+        rt_hw_interrupt_enable(level);
+        rt_kprintf("Hummingbird LCD: clock configuration readback failed\n");
+        return -RT_EIO;
+    }
+
+    rt_hw_interrupt_enable(level);
+    return RT_EOK;
+}
+
+static int panel_pad_prepare(void)
+{
+    rt_ubase_t reg = LS2K_UNCACHED(CHIP_CONFIG4);
+    rt_base_t level = rt_hw_interrupt_disable();
+
+    /* Do not inherit this electrical setting from a particular U-Boot.
+     * Only DVO bits belong to us; retain UART/GMAC pads and bus ordering. */
+    HWREG32(reg) = (HWREG32(reg) & ~HB_PANEL_PAD_MASK) | HB_PANEL_PAD_VALUE;
+    rt_hw_dmb();
+    rt_uint32_t value = HWREG32(reg);
+    rt_hw_interrupt_enable(level);
+
+    if ((value & HB_PANEL_PAD_MASK) != HB_PANEL_PAD_VALUE)
+    {
+        rt_kprintf("Hummingbird LCD: DVO pad readback failed\n");
+        return -RT_EIO;
+    }
+
+    return RT_EOK;
 }
 
 int ls2k0300_hummingbird_panel_init(void)
 {
     static const struct ls2k0300_lcd_timing timing = {
-        .hfront = 160, .hsync = 20, .hback = 140,
-        .vfront = 12, .vsync = 3, .vback = 20,
-        /* Keep the firmware bus configuration, but invert PCLK (bit 9).
-         * ATK-MD0700R showed improved detail in a live phase-1 comparison.
-         * Static fine-detail corruption remains under investigation; this
-         * working point is not evidence of complete optical validation. */
-        .dvo_config = 0x80001111U | (1U << 9),
+        .hfront = HB_PANEL_HFRONT,
+        .hsync = HB_PANEL_HSYNC,
+        .hback = HB_PANEL_HBACK,
+        .vfront = HB_PANEL_VFRONT,
+        .vsync = HB_PANEL_VSYNC,
+        .vback = HB_PANEL_VBACK,
+        .dvo_config = HB_PANEL_DVO_CONFIG,
     };
     rt_base_t level;
     int error = pixel_clock_prepare();
@@ -150,6 +220,15 @@ int ls2k0300_hummingbird_panel_init(void)
     {
         return error;
     }
+
+    error = panel_pad_prepare();
+
+    if (error)
+    {
+        return error;
+    }
+
+    rt_kprintf("Hummingbird LCD profile=%s optical=pending\n", HB_PANEL_PROFILE);
 
     level = rt_hw_interrupt_disable();
     /* DVO G0..27; I2C1 G50/51; GPIO82 INT and GPIO84 backlight. */
