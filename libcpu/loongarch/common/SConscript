@@ -10,7 +10,7 @@ src     = Glob('*.c') + Glob('*.cpp') + Glob('*_gcc.S')
 CPPPATH = [cwd, cwd + '/include']
 
 if not GetDepend('RT_USING_SMART'):
-    SrcRemove(src, ['mmu.c', 'usercopy.c'])
+    SrcRemove(src, ['mmu.c', 'usercopy.c', 'user_thread.c'])
 
 linkflags = []
 if GetDepend('RT_USING_SMART'):
@@ -19,6 +19,10 @@ if GetDepend('RT_USING_SMART'):
     # LoongArch; wrap all entry points, including same-object helper callers.
     for symbol in ('lwp_put_to_user', 'lwp_data_put', 'lwp_data_set', 'lwp_memcpy'):
         linkflags.append('-Wl,--wrap=' + symbol)
+
+    # The legacy thread-create syscall owns a user-stack mapping. Reclaim it
+    # in the deferred cleanup callback, after the thread has left every CPU.
+    linkflags.append('-Wl,--wrap=lwp_cleanup')
 
 group = DefineGroup('libcpu', src, depend = [''], CPPPATH = CPPPATH,
                     LINKFLAGS = ' ' + ' '.join(linkflags))
