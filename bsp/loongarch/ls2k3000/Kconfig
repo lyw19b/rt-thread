@@ -80,4 +80,22 @@ config BSP_NVME_ALLOW_WRITE
     default n
 
 
+config BSP_USING_LS2K3000_GMAC
+    bool "Native GMAC2 Ethernet (polled DMA)"
+    depends on RT_USING_LWIP
+    select BSP_USING_DMA_POOL
+    select BSP_USING_PCI_INVENTORY
+    select RT_USING_MUTEX
+    select RT_USING_DEVICE_OPS
+    default n
+
+config BSP_LS2K3000_MDIO_CLOCK
+    int "GMAC MDC divider encoding (verify CSR input clock)"
+    depends on BSP_USING_LS2K3000_GMAC
+    range 0 5
+    default 4
+    help
+        Encoding 4 divides the CSR clock by 102 (150-250 MHz range).
+        Verify the actual CSR clock before hardware validation.
+
 osource "$NOVAUI_RTOS_DIR/Kconfig"

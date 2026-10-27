@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=8)
     parser.add_argument('--nvme', action='store_true', help='Enable read-only NVMe bring-up')
+    parser.add_argument('--network', action='store_true', help='Compile GMAC2/lwIP support')
     parser.add_argument('--test-source', type=Path, help='Inject a retained C acceptance test')
     parser.add_argument('--novaui', type=Path, help='Embed a native 1920x1080 Smart UI ELF')
     args = parser.parse_args()
@@ -60,6 +61,17 @@ def main():
     if args.nvme:
         with (board / '.config').open('a') as config:
             config.write('\nCONFIG_BSP_USING_NVME=y\n')
+
+    if args.network:
+        with (board / '.config').open('a') as config:
+            config.write('\nCONFIG_RT_USING_LWIP=y\nCONFIG_RT_USING_LWIP212=y\n'
+                         'CONFIG_BSP_USING_LS2K3000_GMAC=y\n'
+                         'CONFIG_RT_LWIP_DHCP=y\nCONFIG_RT_LWIP_USING_PING=y\n'
+                         'CONFIG_RT_LWIP_TCPTHREAD_STACKSIZE=4096\n'
+                         'CONFIG_RT_LWIP_ETHTHREAD_STACKSIZE=4096\n'
+                         'CONFIG_RT_USING_NETDEV=y\nCONFIG_RT_USING_SAL=y\n'
+                         'CONFIG_SAL_USING_POSIX=y\n'
+                         'CONFIG_RT_SYSTEM_WORKQUEUE_STACKSIZE=4096\n')
 
     env = os.environ.copy()
     env['RTT_ROOT'] = str(snapshot)
@@ -115,6 +127,7 @@ def main():
 
     manifest = {'status': 'BUILD_PASS_NOT_BOARD_TESTED', 'profile': args.profile,
                 'nvme': args.nvme,
+                'network': args.network,
                 'novaui_sha256': (hashlib.sha256(args.novaui.read_bytes()).hexdigest()
                                   if args.novaui else None),
                 'test_source_sha256': (hashlib.sha256(args.test_source.read_bytes()).hexdigest()
