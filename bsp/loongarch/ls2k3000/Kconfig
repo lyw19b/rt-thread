@@ -155,4 +155,104 @@ config BSP_LS2K3000_MDIO_CLOCK
         Encoding 4 divides the CSR clock by 102 (150-250 MHz range).
         Verify the actual CSR clock before hardware validation.
 
+menu "LS2K3000 low-speed peripherals"
+
+config BSP_USING_LS2K3000_PERIPHERALS
+    bool
+    select BSP_USING_PCI_INVENTORY
+    select RT_USING_MUTEX
+    select RT_USING_DEVICE_OPS
+
+config BSP_USING_LS2K3000_I2C
+    bool "Native I2C masters (polled)"
+    select BSP_USING_LS2K3000_PERIPHERALS
+    select RT_USING_I2C
+    default n
+    help
+        Register selected i2c0..i2c3 buses, with 7-bit addressing and repeated
+        START. Firmware must configure pad mux and clocks. No automatic scan,
+        SPD writes, 10-bit addressing, GPIO bus recovery or slave support.
+
+config BSP_LS2K3000_I2C_MASK
+    hex "I2C controller mask (bits 0..3)"
+    depends on BSP_USING_LS2K3000_I2C
+    range 0x1 0xf
+    default 0x3
+
+config BSP_USING_LS2K3000_SPI
+    bool "Native SPI masters (polled, thread context)"
+    select BSP_USING_LS2K3000_PERIPHERALS
+    select RT_USING_SPI
+    default n
+    help
+        Register spi0/spi1 and four native chip-select devices per bus.
+        Supports 8-bit MSB-first modes 0..3. Restores firmware flash-read
+        registers after CS release or failure. No automatic flash probing,
+        erase, write-enable, partition or filesystem registration.
+        Boot SPI0 must never be accessed while executing code from flash.
+
+config BSP_LS2K3000_SPI_MASK
+    hex "SPI controller mask (bits 0..1)"
+    depends on BSP_USING_LS2K3000_SPI
+    range 0x1 0x3
+    default 0x3
+
+config BSP_LS2K3000_SPI_INPUT_HZ
+    int "Verified SPI input clock (Hz)"
+    depends on BSP_USING_LS2K3000_SPI
+    range 1000000 500000000
+    default 100000000
+
+config BSP_USING_LS2K3000_RTC
+    bool "Battery-backed TOY RTC (UTC)"
+    select BSP_USING_LS2K3000_PERIPHERALS
+    select RT_USING_RTC
+    default n
+    help
+        Firmware must enable ACPI register access and the TOY oscillator.
+        Registration preserves battery time. Supports dates 1970..9999,
+        seconds and 100 ms timeval resolution. No alarm or wakeup IRQ.
+        Disable RT_USING_SOFT_RTC before enabling this hardware RTC.
+
+config BSP_USING_LS2K3000_HPET
+    bool "Read-only HPET hardware counter"
+    select BSP_USING_LS2K3000_PERIPHERALS
+    default n
+    help
+        Register hpet0 if the 64-bit HPET capability is valid. Reads require
+        firmware to have enabled the counter. No register writes, comparator
+        alarms or IRQ callbacks; the CPU timer still owns the system tick.
+
+config BSP_USING_LS2K3000_GPIO
+    bool "Byte-addressed GPIO input/output"
+    select BSP_USING_LS2K3000_PERIPHERALS
+    select RT_USING_PIN
+    default n
+    help
+        Supports GPIO 0..39 and 46..63. Firmware owns pad mux and pulls.
+        No IRQ, debounce or open-drain support. Set the output latch before
+        selecting output mode when a glitch-free initial level is needed.
+
+config BSP_USING_LS2K3000_PWM
+    bool "Four native 48 MHz PWM channels"
+    select BSP_USING_LS2K3000_PERIPHERALS
+    select RT_USING_PWM
+    default n
+    help
+        Register pwm0, channels 0..3. No automatic output enable or pin mux.
+        Supports period/pulse configuration and explicit enable/disable.
+        Rejects 0/100 percent duty, capture, IRQ and complementary modes.
+
+config BSP_USING_LS2K3000_WDT
+    bool "Native watchdog (explicit start only)"
+    select BSP_USING_LS2K3000_PERIPHERALS
+    select RT_USING_WDT
+    default n
+    help
+        Firmware must enable ACPI register access. Register wdt0 without
+        starting, stopping or feeding a firmware watchdog. Supports 1..85
+        seconds, feed, start and stop; no remaining-time readback exists.
+
+endmenu
+
 osource "$NOVAUI_RTOS_DIR/Kconfig"

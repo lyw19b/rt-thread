@@ -1,0 +1,17 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# File: SConscript
+# Author: LoongsonLab
+
+# Description:
+#   Compile the board-owned gpio driver.
+
+from building import *
+
+cwd = GetCurrentDir()
+group = DefineGroup('LS2K3000 gpio', Glob('*.c'),
+                    depend=['BSP_USING_LS2K3000_GPIO'], CPPPATH=[cwd],
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror',
+                                   '-Wno-ignored-qualifiers'])
+Return('group')

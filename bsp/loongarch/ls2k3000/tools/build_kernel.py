@@ -31,6 +31,8 @@ def main():
     parser.add_argument('--mmc', action='store_true', help='Compile native SD/eMMC support')
     parser.add_argument('--mmc-clock', type=int, default=0, help='Verified MMC input clock in Hz')
     parser.add_argument('--network', action='store_true', help='Compile GMAC2/lwIP support')
+    parser.add_argument('--peripherals', action='store_true',
+                        help='Compile SPI, I2C, RTC, GPIO, PWM, HPET and watchdog')
     parser.add_argument('--test-source', type=Path, help='Inject a retained C acceptance test')
     parser.add_argument('--novaui', type=Path, help='Embed a native 1920x1080 Smart UI ELF')
     args = parser.parse_args()
@@ -84,6 +86,12 @@ def main():
                          'CONFIG_RT_USING_NETDEV=y\nCONFIG_RT_USING_SAL=y\n'
                          'CONFIG_SAL_USING_POSIX=y\n'
                          'CONFIG_RT_SYSTEM_WORKQUEUE_STACKSIZE=4096\n')
+
+    if args.peripherals:
+        with (board / '.config').open('a') as config:
+            config.write('\nCONFIG_RT_USING_SOFT_RTC=n\n')
+            for name in ('SPI', 'I2C', 'RTC', 'GPIO', 'PWM', 'HPET', 'WDT'):
+                config.write('\nCONFIG_BSP_USING_LS2K3000_' + name + '=y\n')
 
     env = os.environ.copy()
     env['RTT_ROOT'] = str(snapshot)
@@ -139,7 +147,7 @@ def main():
 
     manifest = {'status': 'BUILD_PASS_NOT_BOARD_TESTED', 'profile': args.profile,
                 'nvme': args.nvme, 'mmc': args.mmc, 'mmc_clock': args.mmc_clock,
-                'network': args.network,
+                'network': args.network, 'peripherals': args.peripherals,
                 'novaui_sha256': (hashlib.sha256(args.novaui.read_bytes()).hexdigest()
                                   if args.novaui else None),
                 'test_source_sha256': (hashlib.sha256(args.test_source.read_bytes()).hexdigest()

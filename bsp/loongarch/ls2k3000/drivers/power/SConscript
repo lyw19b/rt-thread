@@ -9,7 +9,14 @@
 
 from building import *
 
-group = DefineGroup('LS2K3000 power', Glob('*.c'), depend=[''],
+cwd = GetCurrentDir()
+
+sources = ['drv_power.c']
+
+if GetDepend('BSP_USING_LS2K3000_WDT'):
+    sources += ['drv_watchdog.c', 'watchdog_hw.c']
+
+group = DefineGroup('LS2K3000 power', sources, depend=[''], CPPPATH=[cwd],
                     LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror',
                                    '-Wno-ignored-qualifiers'])
 Return('group')
