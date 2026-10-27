@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: watchdog_hw.h
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Expose bounded watchdog configuration without automatic arming.
+ * Notes:
+ *   The caller serializes operations; this interface does not expose time remaining.
  */
 
 #ifndef LS2K3000_WATCHDOG_HW_H

@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: pwm_hw.h
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Describe checked native PWM register operations.
+ * Notes:
+ *   The caller serializes channel configuration; period and pulse are in nanoseconds.
  */
 
 #ifndef LS2K3000_PWM_HW_H

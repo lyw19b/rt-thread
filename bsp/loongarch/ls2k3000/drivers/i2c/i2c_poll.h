@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: i2c_poll.h
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Describe native I2C messages independently of the OS adapter.
+ * Notes:
+ *   The caller serializes complete transactions and issues STOP after the final message.
  */
 
 #ifndef LS2K3000_I2C_POLL_H

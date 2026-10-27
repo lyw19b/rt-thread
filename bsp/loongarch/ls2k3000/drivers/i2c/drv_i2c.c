@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: drv_i2c.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Register four polled I2C buses with RT-Thread bus locking.
+ * Notes:
+ *   Only thread-context, 7-bit master transfers are supported; firmware owns pad mux.
  */
 
 #include <rtdevice.h>

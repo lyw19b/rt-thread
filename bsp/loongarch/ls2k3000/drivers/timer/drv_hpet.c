@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: drv_hpet.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Register HPET measurements while keeping CPU timer tick and firmware state intact.
+ * Notes:
+ *   CPU timers retain the system tick; this device provides no comparator IRQ callbacks.
  */
 
 #include <rtdevice.h>

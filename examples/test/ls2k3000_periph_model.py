@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+#
 # SPDX-License-Identifier: Apache-2.0
 #
-# File: ls2k3000_periph_model.py
-# Author: LoongsonLab
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-28     LoongsonLab               align file header with LS2K0300
 
 # Description:
 #   Test native modeled peripherals with an explicit synthetic boot contract.

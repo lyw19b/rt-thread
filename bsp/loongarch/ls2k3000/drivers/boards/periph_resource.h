@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: periph_resource.h
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Resolve board peripheral resources without changing firmware BARs.
+ * Notes:
+ *   Missing or invalid firmware resources are reported to the caller.
  */
 
 #ifndef LS2K3000_PERIPH_RESOURCE_H

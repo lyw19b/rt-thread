@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: rtc_toy.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Validate TOY dates, handle rollover and bound asynchronous write completion.
+ * Notes:
+ *   Use UTC and the firmware year-minus-1900 convention; do not reset the oscillator.
  */
 
 #include "rtc_toy.h"

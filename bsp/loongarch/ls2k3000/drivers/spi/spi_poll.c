@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: spi_poll.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Transfer native SPI bytes and restore firmware flash read configuration.
+ * Notes:
+ *   Restore firmware registers on release or failure; do not execute SPI0 XIP code.
  */
 
 #include "spi_poll.h"

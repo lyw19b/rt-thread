@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: hpet_counter.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Read a live 64-bit HPET counter using high-low-high sampling.
+ * Notes:
+ *   Firmware must enable the main counter; sampling never writes HPET registers.
  */
 
 #include "hpet_counter.h"

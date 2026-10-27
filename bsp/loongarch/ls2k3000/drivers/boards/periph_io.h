@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: periph_io.h
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Provide testable register access and bounded peripheral operations.
+ * Notes:
+ *   Register callbacks must preserve access width and provide a monotonic clock.
  */
 
 #ifndef LS2K3000_PERIPH_IO_H

@@ -1,13 +1,12 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
- * SPDX-License-Identifier: Apache-2.0
  *
- * File: uefi_probe.c
- * Author: LoongsonLab
+ * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
  * Date           Author                    Notes
  * 2026-10-27     LoongsonLab               inspect UEFI resources before handoff
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*

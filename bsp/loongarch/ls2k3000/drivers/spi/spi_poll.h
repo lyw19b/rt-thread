@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: spi_poll.h
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Describe native SPI state and firmware register preservation.
+ * Notes:
+ *   The caller holds the bus lock across the entire chip-select chain.
  */
 
 #ifndef LS2K3000_SPI_POLL_H

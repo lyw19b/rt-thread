@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: periph_resource.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Map retained PCI resources and use the CPU constant counter for timeouts.
+ * Notes:
+ *   Use firmware-assigned BARs; do not reallocate PCI resources or change pad mux.
  */
 
 #include <rthw.h>

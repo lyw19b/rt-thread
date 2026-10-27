@@ -1,3 +1,14 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-28     LoongsonLab               align file header with LS2K0300
+
+# Description:
+#   Exclude local BSP configurations, build products and Python caches.
+
 rtthread.*
 compile_commands.json
 link_stacksize.lds

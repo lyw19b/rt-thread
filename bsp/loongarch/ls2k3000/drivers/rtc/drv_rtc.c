@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: drv_rtc.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Register the battery-backed RTC with SMP serialization and UTC semantics.
+ * Notes:
+ *   Registration preserves battery time; hardware and software RTC cannot coexist.
  */
 
 #include <rtdevice.h>

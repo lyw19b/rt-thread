@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: watchdog_hw.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Program the 50 MHz watchdog without echoing the adjacent software reset bit.
+ * Notes:
+ *   Never echo RST_CNT bit 0: writing it requests an immediate board reset.
  */
 
 #include "watchdog_hw.h"

@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: i2c_poll.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Implement 7-bit I2C, repeated START, final NACK and bounded error recovery.
+ * Notes:
+ *   Polling is bounded; arbitration loss must not generate a STOP on another master.
  */
 
 #include "i2c_poll.h"

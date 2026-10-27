@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: pwm_hw.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Program 48 MHz PWM counters with output masked during updates.
+ * Notes:
+ *   Do not take over capture or interrupt channels; reject unsupported duty cycles.
  */
 
 #include "pwm_hw.h"

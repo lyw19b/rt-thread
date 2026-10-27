@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: drv_spi.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Register SPI buses and native chip-select devices without probing or erasing NOR.
+ * Notes:
+ *   Use thread-context bus APIs; no automatic NOR erase or firmware update is performed.
  */
 
 #include <rtdevice.h>

@@ -1,14 +1,18 @@
 /*
  * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
- * File: drv_watchdog.c
- * Author: LoongsonLab
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               align file header with LS2K0300
  */
 
 /*
  * Description:
  *   Register an opt-in hardware watchdog and preserve firmware state at probe.
+ * Notes:
+ *   Registration does not arm or stop the watchdog; START and STOP are explicit.
  */
 
 #include <rtdevice.h>
