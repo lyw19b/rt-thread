@@ -38,6 +38,11 @@ Export('rtconfig')
 # prepare building environment
 objs = PrepareBuilding(env, RTT_ROOT, has_libcpu = False)
 
+if GetDepend('BSP_LS2K0300') and GetDepend('BSP_USING_GMAC'):
+    # Keep board resource limits outside the shared lwIP port. opt.h resolves
+    # this wrapper first; it includes the original options before overriding.
+    env.Prepend(CPPPATH=[os.path.join(RTT_ROOT, 'bsp', 'loongarch', 'common', 'gmac')])
+
 stack_size = 16384
 
 if GetDepend('__STACKSIZE__'):

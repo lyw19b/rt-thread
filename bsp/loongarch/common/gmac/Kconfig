@@ -18,6 +18,16 @@ menuconfig BSP_USING_GMAC
     default n
 
 if BSP_USING_GMAC
+    config BSP_GMAC_UDP_QUEUE_SIZE
+        int "UDP receive mailbox entries per socket"
+        depends on BSP_LS2K0300
+        range 1 128
+        default 32
+        help
+            Bound receive bursts while a lower-priority application is waiting
+            to run. The shared lwIP port otherwise hardcodes one queue entry.
+            Also reserves twice this many netbuf records across all sockets.
+
     config BSP_USING_GMAC0
         bool "GMAC0 (e0)"
         default y

@@ -9,7 +9,11 @@
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
  */
 
-/* Description: Check LS2K0300 firmware clocks without resetting the shared PHY. */
+/*
+ * Description:
+ *   Keep the host PHY awake when EHCI takes ownership from firmware. Disable
+ *   OHCI DMA schedules and preserve PHY tuning, OTG and reference clocks.
+ */
 
 #include <rtthread.h>
 #include <rthw.h>
@@ -19,6 +23,12 @@
 #ifdef BSP_USING_USB_HOST
 rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardware_ports)
 {
+    rt_ubase_t companion = LOONGARCH_PHYS_UNCACHED(0x16088000UL);
+    rt_ubase_t phy = LOONGARCH_PHYS_UNCACHED(0x16000508UL);
+    const rt_uint32_t host_override = (1U << 28) | (1U << 30);
+    rt_uint32_t control;
+    rt_uint32_t phy_control;
+
     if ((HWREG32(LOONGARCH_PHYS_UNCACHED(0x16000114UL)) & 0x180) != 0x180 ||
         (HWREG32(LOONGARCH_PHYS_UNCACHED(0x1600011cUL)) & 0x180) != 0x180)
     {
@@ -26,6 +36,44 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
         return -RT_ERROR;
     }
 
+    if ((HWREG32(companion) & 0xff) != 0x10)
+    {
+        rt_kprintf("USB: unexpected OHCI companion revision\n");
+        return -RT_ENOSYS;
+    }
+
+    /* Quiesce the companion without running any of its DMA lists. Clearing
+     * HCFS alone does not restore EHCI connection detection on LS2K0300. */
+    rt_hw_interrupt_mask(47);
+    HWREG32(companion + 0x14) = 0xffffffffU;
+    control = HWREG32(companion + 4);
+    HWREG32(companion + 4) = control & ~0xfcU;
+    rt_hw_dmb();
+
+    if (HWREG32(companion + 4) & 0xfcU)
+    {
+        return -RT_ERROR;
+    }
+
+    rt_kprintf("USB companion: control %08x -> %08x, schedules disabled\n",
+               control, HWREG32(companion + 4));
+
+    /* SPL uses host level bit 30=1, but delegates suspend to the controllers
+     * with bit 28=0. After usb stop that leaves CCS=0 on this board. Select
+     * the same awake level under software control before starting EHCI.
+     * No PHY reset or clock/pulldown/OTG settings are changed. */
+    phy_control = HWREG32(phy);
+    HWREG32(phy) = phy_control | host_override;
+    rt_hw_dmb();
+
+    if ((HWREG32(phy) & host_override) != host_override)
+    {
+        return -RT_ERROR;
+    }
+
+    rt_thread_mdelay(20);
+    rt_kprintf("USB host PHY: %08x -> %08x, software awake\n",
+               phy_control, HWREG32(phy));
     *base = LOONGARCH_PHYS_UNCACHED(0x16080000UL);
     *irq = 46;
     *hardware_ports = 1;

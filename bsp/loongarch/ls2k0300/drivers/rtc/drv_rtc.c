@@ -26,7 +26,8 @@
 
 /* RTC Control Register bit definitions */
 #define RTC_CTRL_TOY_ENABLE (1 << 11)   /* TOY timer enable */
-#define RTC_CTRL_RTC_ENABLE (1 << 8)    /* RTC enable */
+#define RTC_CTRL_RTC_ENABLE (1 << 13)   /* RTC counter enable */
+#define RTC_CTRL_OSC_ENABLE (1 << 8)    /* 32.768 kHz oscillator enable */
 
 /**
  * @brief Convert hardware RTC data to struct tm
@@ -260,7 +261,7 @@ static rt_err_t rtc_init(void)
     writel(0, LS_RTC_TRIM_REG);
 
     /* Configure and enable RTC */
-    ctrl_val = RTC_CTRL_TOY_ENABLE | RTC_CTRL_RTC_ENABLE;
+    ctrl_val = RTC_CTRL_TOY_ENABLE | RTC_CTRL_RTC_ENABLE | RTC_CTRL_OSC_ENABLE;
     writel(ctrl_val, LS_RTC_CTRL_REG);
 
     return RT_EOK;

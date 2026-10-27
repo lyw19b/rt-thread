@@ -45,7 +45,7 @@ static void rtc_dump(void)
     /* Also show as timestamp */
     struct tm tm;
     rtc_to_tm(&hw_data, &tm);
-    time_t ts = mktime(&tm);
+    time_t ts = timegm(&tm);
     rt_kprintf("Timestamp: %ld\n", (long)ts);
 }
 
