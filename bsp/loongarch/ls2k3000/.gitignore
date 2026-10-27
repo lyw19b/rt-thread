@@ -1,0 +1,9 @@
+rtthread.*
+compile_commands.json
+link_stacksize.lds
+.config
+.config.old
+rtconfig.h
+.sconsign.dblite
+build/
+__pycache__/

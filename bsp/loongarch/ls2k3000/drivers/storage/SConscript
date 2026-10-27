@@ -1,0 +1,15 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# File: SConscript
+# Author: LoongsonLab
+
+# Description:
+#   Build native PCIe NVMe support without changing the shared RT-Thread drivers.
+
+from building import *
+
+cwd = GetCurrentDir()
+group = DefineGroup('LS2K3000 NVMe', Glob('*.c'), depend=['BSP_USING_NVME'], CPPPATH=[cwd],
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+Return('group')

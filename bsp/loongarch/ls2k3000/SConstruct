@@ -1,0 +1,26 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# File: SConstruct
+# Author: LoongsonLab
+#
+# Description:
+#   Build the Explorer BSP without modifying shared components.
+
+import os
+import shutil
+import sys
+
+os.environ.setdefault('NOVAUI_RTOS_DIR',
+                      os.path.abspath('../../../../../display/novauiOS/platform/rtos'))
+
+if not os.path.exists('.config'):
+    shutil.copyfile('config/rtt_defconfig', '.config')
+
+if not os.path.exists('rtconfig.h'):
+    sys.path.insert(0, os.path.abspath('../../../tools'))
+    from env_utility import mk_rtconfig
+    mk_rtconfig('.config')
+
+with open('../common/build.py') as source:
+    exec(compile(source.read(), '../common/build.py', 'exec'))

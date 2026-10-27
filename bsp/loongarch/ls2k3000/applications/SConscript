@@ -1,0 +1,13 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# File: SConscript
+# Author: LoongsonLab
+#
+# Description:
+#   Compile the board shell and acceptance commands.
+
+from building import *
+
+group = DefineGroup('LS2K3000 application', Glob('*.c'), depend=[''])
+Return('group')

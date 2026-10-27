@@ -1,0 +1,26 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# File: SConscript
+# Author: LoongsonLab
+#
+# Description:
+#   Keep each board device in its own directory.
+
+from building import *
+
+cwd = GetCurrentDir()
+group = DefineGroup('LS2K3000 interfaces', [], depend=[''],
+                    CPPPATH=[os.path.join(cwd, 'boards'),
+                             os.path.join(cwd, '..', 'boot'),
+                             os.path.join(cwd, 'pcie')])
+
+for directory in ('boards', 'display', 'pcie', 'storage', 'power'):
+    group += SConscript(os.path.join(directory, 'SConscript'))
+
+if GetDepend('BSP_USING_NOVAUI'):
+    ui_dir = os.environ['NOVAUI_RTOS_DIR']
+    group += SConscript(os.path.join(ui_dir, 'SConscript'),
+                        variant_dir='novaui', duplicate=0)
+
+Return('group')

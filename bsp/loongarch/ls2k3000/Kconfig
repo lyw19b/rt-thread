@@ -1,0 +1,83 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# File: Kconfig
+# Author: LoongsonLab
+#
+# Description:
+#   Configure UEFI boot and board-owned LS2K3000 drivers.
+
+mainmenu "RT-Thread LS2K3000 Explorer Configuration"
+BSP_DIR := .
+RTT_DIR := ../../..
+PKGS_DIR := packages
+
+source "$(RTT_DIR)/Kconfig"
+osource "$PKGS_DIR/Kconfig"
+
+config BSP_LS2K3000
+    bool
+    default y
+    select ARCH_LOONGARCH64
+    select ARCH_LOONGARCH_FPU
+    select RT_USING_COMPONENTS_INIT
+    select RT_USING_USER_MAIN
+    select RT_USING_CACHE
+    select ARCH_MM_MMU if RT_USING_SMART
+    select ARCH_REMAP_KERNEL if RT_USING_SMART
+
+config RT_CPUS_NR
+    range 1 8 if RT_USING_SMP
+    default 1 if RT_USING_SMP
+
+config __STACKSIZE__
+    int "Boot and per-CPU stack bytes"
+    default 16384
+
+config BSP_UART_CLOCK_HZ
+    int "UART0 input clock (Hz)"
+    default 100000000
+    range 1000000 500000000
+
+config BSP_USING_UEFI_FRAMEBUFFER
+    bool "Retain firmware GOP scanout"
+    default y
+    help
+        Register an existing linear 32-bit RGB/BGR framebuffer as lcd.
+        HDMI mode setting remains owned by firmware before handoff.
+        BLT-only modes and unsupported pixel formats are rejected.
+
+config BSP_USING_BOOT_SCREEN
+    bool "Show kernel startup status and display checks"
+    depends on BSP_USING_UEFI_FRAMEBUFFER && !BSP_USING_NOVAUI
+    default y
+    help
+        Render startup status, resolution, color bars and the full screen border
+        into the firmware framebuffer. Keeps the current HDMI/display mode.
+
+config BSP_USING_PCI_INVENTORY
+    bool "Inspect firmware PCI resources"
+    default y
+
+config BSP_USING_DMA_POOL
+    bool
+
+config BSP_USING_NVME
+    bool "NVMe SSD (one namespace, polled queues)"
+    select BSP_USING_DMA_POOL
+    select BSP_USING_PCI_INVENTORY
+    select RT_USING_MUTEX
+    select RT_USING_DEVICE_OPS
+    default n
+    help
+        Uses firmware PCI resources and dedicated uncached DMA storage.
+        Supports 512-byte and 4 KiB sectors with bounded synchronous commands.
+        Does not format or automatically mount any disk. MSI is not required.
+
+config BSP_NVME_ALLOW_WRITE
+    bool "Allow explicit NVMe block writes"
+    depends on BSP_USING_NVME
+    default n
+
+
+osource "$NOVAUI_RTOS_DIR/Kconfig"
