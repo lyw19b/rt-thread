@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=8)
     parser.add_argument('--nvme', action='store_true', help='Enable read-only NVMe bring-up')
+    parser.add_argument('--mmc', action='store_true', help='Compile native SD/eMMC support')
+    parser.add_argument('--mmc-clock', type=int, default=0, help='Verified MMC input clock in Hz')
     parser.add_argument('--network', action='store_true', help='Compile GMAC2/lwIP support')
     parser.add_argument('--test-source', type=Path, help='Inject a retained C acceptance test')
     parser.add_argument('--novaui', type=Path, help='Embed a native 1920x1080 Smart UI ELF')
@@ -61,6 +63,16 @@ def main():
     if args.nvme:
         with (board / '.config').open('a') as config:
             config.write('\nCONFIG_BSP_USING_NVME=y\n')
+
+    if args.mmc:
+        if not 0 <= args.mmc_clock <= 409200000:
+            parser.error('--mmc-clock is outside the 10-bit identification divider range')
+
+        with (board / '.config').open('a') as config:
+            config.write('\nCONFIG_BSP_USING_LS2K3000_MMC=y\n'
+                         'CONFIG_RT_MMCSD_STACK_SIZE=4096\n'
+                         'CONFIG_RT_SDIO_STACK_SIZE=4096\n'
+                         'CONFIG_BSP_LS2K3000_MMC_INPUT_HZ=' + str(args.mmc_clock) + '\n')
 
     if args.network:
         with (board / '.config').open('a') as config:
@@ -126,7 +138,7 @@ def main():
             raise SystemExit(result.returncode)
 
     manifest = {'status': 'BUILD_PASS_NOT_BOARD_TESTED', 'profile': args.profile,
-                'nvme': args.nvme,
+                'nvme': args.nvme, 'mmc': args.mmc, 'mmc_clock': args.mmc_clock,
                 'network': args.network,
                 'novaui_sha256': (hashlib.sha256(args.novaui.read_bytes()).hexdigest()
                                   if args.novaui else None),

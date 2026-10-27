@@ -80,6 +80,63 @@ config BSP_NVME_ALLOW_WRITE
     default n
 
 
+config BSP_USING_LS2K3000_MMC
+    bool "Native SD/eMMC memory host"
+    select RT_USING_SDIO
+    select BSP_USING_DMA_POOL
+    select BSP_USING_PCI_INVENTORY
+    select RT_USING_MUTEX
+    select RT_USING_SEMAPHORE
+    default n
+    help
+        Board-owned synchronous DMA driver for the native LS2K3000 controller.
+        Supports SD memory (1/4-bit) and eMMC user area (1/4/8-bit) in SDR mode.
+        Does not advertise HS200, HS400, DDR, SDIO function IRQs or hot removal.
+        Firmware supplies pad mux, card power and clocks. No automatic mounting.
+
+if BSP_USING_LS2K3000_MMC
+
+config BSP_LS2K3000_MMC_INPUT_HZ
+    int "Verified SD/eMMC controller input clock (Hz; 0 disables initialization)"
+    range 0 409200000
+    default 0
+    help
+        Must match the firmware clock feeding the native prescaler. Do not use
+        the CPU or UART clock. Zero deliberately prevents guessing a frequency.
+
+config BSP_LS2K3000_MMC_MAX_HZ
+    int "Maximum SDR card clock (Hz)"
+    range 400000 25000000
+    default 25000000
+
+config BSP_LS2K3000_MMC_ALLOW_WRITE
+    bool "Allow SD/eMMC user-area block writes"
+    default n
+    help
+        Disabled for initial bring-up. The installed eMMC contains Linux and
+        its EFI partition. Enabling this does not format or mount any partition.
+
+config BSP_LS2K3000_MMC_ACPI_STATIC
+    bool "Use explicit ACPI resources when firmware hides the PCI functions"
+    default n
+    help
+        Use only with resource addresses verified from this board's ACPI _CRS.
+        PCI enumeration takes precedence when the native functions are visible.
+        Current Explorer firmware exposed eMMC at 0x79990000 and SD at 0x79991000
+        in Linux /proc/iomem. Addresses default to zero to avoid stale mappings.
+
+config BSP_LS2K3000_EMMC_BASE
+    hex "Verified ACPI eMMC MMIO base (0 skips)"
+    depends on BSP_LS2K3000_MMC_ACPI_STATIC
+    default 0
+
+config BSP_LS2K3000_SD_BASE
+    hex "Verified ACPI SD MMIO base (0 skips)"
+    depends on BSP_LS2K3000_MMC_ACPI_STATIC
+    default 0
+
+endif
+
 config BSP_USING_LS2K3000_GMAC
     bool "Native GMAC2 Ethernet (polled DMA)"
     depends on RT_USING_LWIP
