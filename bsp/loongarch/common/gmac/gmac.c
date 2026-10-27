@@ -38,8 +38,15 @@ static void _barrier(struct ls2k_gmac *mac)
 static int _wait_clear(struct ls2k_gmac *mac, unsigned int reg, uint32_t mask)
 {
     unsigned int attempt;
+    unsigned int timeout = reg == GMAC_DMA_BUS && mac->reset_timeout_ms ?
+                           mac->reset_timeout_ms : 100;
 
-    for (attempt = 0; attempt < 100; attempt++)
+    if (timeout > 5000)
+    {
+        return -EINVAL;
+    }
+
+    for (attempt = 0; attempt < timeout; attempt++)
     {
         if (!(_read(mac, reg) & mask))
             return 0;
@@ -194,7 +201,7 @@ int ls2k_gmac_start(struct ls2k_gmac *mac, const uint8_t address[6], int phy)
     _write(mac, 0x010c, UINT32_MAX); /* MMC RX mask */
     _write(mac, 0x0110, UINT32_MAX); /* MMC TX mask */
     _write(mac, 0x0200, UINT32_MAX); /* MMC checksum mask */
-    _write(mac, GMAC_DMA_STATUS, GMAC_DMA_STATUS_W1C);
+    _write(mac, GMAC_DMA_STATUS, mac->status_w1c ? mac->status_w1c : GMAC_DMA_STATUS_W1C);
     _write(mac, GMAC_DMA_CONTROL, (1U << 25) | (1U << 21) | (1U << 2) |
            DMA_RX_START | DMA_TX_START);
     /* The adapter installs its ISR before enabling these interrupts. */

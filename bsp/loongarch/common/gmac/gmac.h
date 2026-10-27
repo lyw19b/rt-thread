@@ -82,6 +82,9 @@ struct ls2k_gmac
     struct ls2k_gmac_ring tx, rx;
     unsigned int tx_head, tx_tail, tx_pending, rx_head;
     unsigned int phy, mdio_clock;
+    /* Zero preserves the original boards' reset budget and status mask. */
+    unsigned int reset_timeout_ms;
+    uint32_t status_w1c;
     unsigned int speed;
     int link, duplex, running;
     uint64_t tx_packets, rx_packets, tx_errors, rx_errors;
