@@ -28,7 +28,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DRIVER = ROOT / 'bsp/loongarch/ls2k0300/drivers'
+DRIVER = ROOT / 'bsp/loongarch/ls2k0300/drivers/sd'
 
 
 def cross_build(output, toolchain):
@@ -40,9 +40,9 @@ def cross_build(output, toolchain):
     build = output / 'cross'
     bsp = prepare_kernel(build)
     env = build_environment(toolchain, 'loongarch64-linux-musl-')
-    base = (bsp / 'sd_network_defconfig').read_text()
+    base = (bsp / 'config' / 'sd_network_defconfig').read_text()
     variants = {
-        'disabled': (bsp / 'smart_defconfig').read_text(),
+        'disabled': (bsp / 'config' / 'smart_defconfig').read_text(),
         'standard-up': base + '\nCONFIG_RT_USING_SMART=n\nCONFIG_RT_USING_SMP=n\n',
         'sdio1': base + '\nCONFIG_BSP_SDIO_PORT=1\n',
         'smart-sdio0-gmac0': base,

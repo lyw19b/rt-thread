@@ -39,7 +39,7 @@ def build(args):
                                 kernel_mapping=args.mode)
     bsp = kernel.parent
     if args.heap_end_mib != 96:
-        path = bsp / 'drivers/board.h'
+        path = bsp / 'drivers/boards/board.h'
         source = path.read_text()
         if '0x06000000UL' not in source:
             raise ValueError('Expected the large novauiOS image heap boundary')

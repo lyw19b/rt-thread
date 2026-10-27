@@ -41,11 +41,11 @@ PHY 使用 Clause 22 MDIO，支持自动协商和链路轮询。驱动保留固�
 - `bsp/loongarch/common/ls2k_gmac_platform.h`：板级 GMAC 资源和 DMA 地址范围接口。
 - `drivers/drv_gmac_platform.c`：板级 GMAC 资源获取与 DMA 地址范围。
 - `drivers/drv_pci.c`：2K1000LA 的 BAR 检查和 PCI 命令。
-- `libcpu/loongarch/ls2k/platform_interrupt.c`：两款芯片共用的传统 LIOINTC 驱动，包含边沿确认、屏蔽和分发。
+- `libcpu/loongarch/mach/common/platform_interrupt.c`：两款芯片共用的传统 LIOINTC 驱动，包含边沿确认、屏蔽和分发。
 - `bsp/loongarch/common/drv_uart.c`：共用串口驱动，Nano 使用轮询，标准版和 Smart 使用 serial v1；共用 IRQ 时逐个检查已注册串口。
 - `bsp/loongarch/common`：共用构建入口、工具链参数、内核 libc 映射和链接段布局；各 BSP 仅保留加载地址、次核栈大小和镜像名称。
 
-UART 和 GMAC 由两个 BSP 的 `SConscript` 引入，目标文件分别放在各 BSP 的 `build/common` 下。`libcpu/loongarch/ls2k` 仅保留 LIOINTC 和 CPU 物理地址/非缓存地址转换定义。
+UART 和 GMAC 由两个 BSP 的 `SConscript` 引入，目标文件分别放在各 BSP 的 `build/common` 下。`libcpu/loongarch/mach/common` 仅保留 LIOINTC 和 CPU 物理地址/非缓存地址转换定义。
 
 DMA 使用链接脚本保留的 `.gmac_dma` 区域。它不属于 `.bss` 清零区或堆，也不由 ELF 加载段初始化；驱动只通过非缓存别名访问它。描述符和数据的物理地址必须处于 32 位 DMA 窗口。写入描述符字段和帧数据后，先执行屏障，再交出 OWN；接收时先取得所有权，再读取帧。
 
@@ -179,7 +179,7 @@ ATK-MD0700R-1024x600 屏上的文字、布局和显示清晰正常。
 ```sh
 cd bsp/loongarch/ls2k0300
 export RTT_EXEC_PATH="$HOME/local/loongarch64-linux-musl-gcc-15.2.0/bin"
-cp smart_defconfig .config  # 也可选 nano、standard、network_defconfig
+cp config/smart_defconfig .config  # 其他配置同样位于 config/
 scons --pyconfig-silent
 scons -j8
 ```

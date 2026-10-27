@@ -27,7 +27,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DRIVER = ROOT / 'bsp/loongarch/ls2k0300/drivers'
+DRIVER = ROOT / 'bsp/loongarch/ls2k0300/drivers/usb'
 COMMON = ROOT / 'components/drivers/usb/cherryusb/common'
 
 
@@ -57,10 +57,10 @@ def builds(args):
 
     bsp = prepare_kernel(args.output / 'cross')
     env = build_environment(args.toolchain, 'loongarch64-linux-musl-')
-    base = (bsp / 'usb_defconfig').read_text()
+    base = (bsp / 'config' / 'usb_defconfig').read_text()
     page = setting(setting(base, 'KMD_USE_DMW', 'n'), 'KMD_USE_PAGE', 'y')
     standard = setting(setting(base, 'RT_USING_SMART', 'n'), 'RT_USING_SMP', 'n')
-    combined = setting((bsp / 'sd_network_defconfig').read_text(), 'BSP_USING_USB_HOST', 'y')
+    combined = setting((bsp / 'config' / 'sd_network_defconfig').read_text(), 'BSP_USING_USB_HOST', 'y')
     combined = setting(setting(combined, 'KMD_USE_DMW', 'n'), 'KMD_USE_PAGE', 'y')
     configs = {
         'dmw-usb': base,

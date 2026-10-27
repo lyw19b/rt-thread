@@ -86,7 +86,8 @@ def build_tests(args, output):
         if not candidates:
             raise RuntimeError("Set RTT_EXEC_PATH to the LoongArch compiler bin directory")
         env["RTT_EXEC_PATH"] = str(candidates[-1].parent)
-    network = (BSP / "network_defconfig").read_text()
+    profiles = BSP / "config" if args.bsp == "ls2k0300" else BSP
+    network = (profiles / "network_defconfig").read_text()
     variants = {
         "gmac0": {"BSP_USING_GMAC1": "n"},
         "gmac1": {"BSP_USING_GMAC0": "n"},
@@ -111,7 +112,7 @@ def build_tests(args, output):
             base = name if name in ("nano", "smart", "standard") else "network"
             if name in ("uart9", "standard-up"):
                 base = "standard"
-            config = (BSP / f"{base}_defconfig").read_text()
+            config = (profiles / f"{base}_defconfig").read_text()
             for key, value in options.items():
                 config = set_config(config, key, value)
             (BSP / ".config").write_text(config)

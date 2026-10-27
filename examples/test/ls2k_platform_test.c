@@ -46,13 +46,13 @@ void rt_thread_mdelay(int ms)
     delay_count++;
 }
 
-#include "../../libcpu/loongarch/ls2k/platform_interrupt.c"
+#include "../../libcpu/loongarch/mach/common/platform_interrupt.c"
 #define RT_USING_NANO
 #include "../../bsp/loongarch/common/drv_uart.c"
 #ifdef TEST_LS2K1000
 #include "../../bsp/loongarch/ls2k1000/drivers/drv_uart_config.c"
 #else
-#include "../../bsp/loongarch/ls2k0300/drivers/drv_platform.c"
+#include "../../bsp/loongarch/ls2k0300/drivers/boards/drv_platform.c"
 #endif
 
 static void _dispatch(int irq, void *parameter)

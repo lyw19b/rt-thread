@@ -65,14 +65,15 @@ git diff --stat
 | `src/`、`include/` | RT-Thread 内核及公共接口；调度、IPC、线程生命周期等 |
 | `libcpu/loongarch/common/` | 共用启动、上下文、异常、MMU/TLB、SMP/IPI、定时器、栈和缓存接口 |
 | `libcpu/loongarch/common/include/` | 寄存器、异常帧、页表、汇编偏移及 CPU 接口 |
-| `libcpu/loongarch/ls2k/` | LS2K 传统 LIOINTC 中断及 CPU 地址转换定义；不放 UART/GMAC |
+| `libcpu/loongarch/mach/common/` | LS2K 传统 LIOINTC 中断及 CPU 地址转换定义；不放 UART/GMAC |
 | `components/lwp/arch/loongarch/loong64/` | Smart 架构适配，用户上下文、信号、fork/clone 等 |
 | `components/lwp/`、`components/mm/` | 通用 Smart 进程、系统调用、信号和地址空间实现 |
 | `components/drivers/`、`components/net/` | 通用设备框架、网络栈和 lwIP 适配 |
 | `bsp/qemu-virt64-loongarch/` | QEMU BSP、三个 defconfig、运行脚本、RAM 磁盘和平台驱动 |
 | `bsp/loongarch/common/` | 两款 LS2K 共用的 UART、GMAC、构建配置、链接段布局 |
 | `bsp/loongarch/ls2k1000/` | 2K1000LA 板级地址、PCI、GMAC 资源、固件接口和配置 |
-| `bsp/loongarch/ls2k0300/` | 2K0300 板级地址、时钟、固定 MMIO 资源和配置 |
+| `bsp/loongarch/ls2k0300/` | 当前 2K0300 BSP；驱动按功能分目录，配置位于 `config/` |
+| `bsp/loongarch/ls2k0300-deprecated/` | 原 BSP 归档，不作为日常构建入口 |
 | `examples/test/` | LoongArch 内核/用户/SMP 测试、QEMU 驱动脚本、LS2K 宿主模型及 UDP 校验工具 |
 | `tools/` | SCons/Kconfig 等仓库构建支持 |
 | `documentation/7.contribution/` | 仓库编码规范 |
@@ -80,7 +81,7 @@ git diff --stat
 重要命名已调整，不要恢复旧名称：
 
 - `bsp/loongarch/ls2kdev` 已改为 `bsp/loongarch/ls2k1000`。参考仓库路径中的 `ls2kdev` 仍可能有效；其他架构的同名 BSP 与此无关。
-- LS2K 中断实现为 `libcpu/loongarch/ls2k/platform_interrupt.c`，各板接口头为 `drivers/platform_interrupt.h`；`liointc.h` 是共用寄存器定义。
+- LS2K 中断实现为 `libcpu/loongarch/mach/common/platform_interrupt.c`，各板接口头为 `drivers/platform_interrupt.h`；`liointc.h` 是共用寄存器定义。
 - 共用 UART 是 `bsp/loongarch/common/drv_uart.c`，GMAC 是该目录下的 `gmac/`，不再放在 `libcpu`。
 - 每个 BSP 的 `SConscript` 通过独立 `variant_dir='common'` 引入共享驱动，构建输出分别进入各 BSP 的 `build/common`。不要让不同 BSP 共享一份带配置宏的目标文件。
 
@@ -200,7 +201,7 @@ scons -j8
 
 ```sh
 cd /home/airxs/user/aicode/kernel/rt-thread/bsp/loongarch/ls2k0300
-cp smart_defconfig .config
+cp config/smart_defconfig .config
 scons --pyconfig-silent
 scons -j8
 ```
@@ -632,3 +633,6 @@ python3 examples/test/loongarch_port_state_test.py
 - 完成一个阶段后记录提交、实际测试命令/结果、尚未解决问题，并更新本文或已有 BSP README；不能只写“测试完全”或“全部通过”而省略范围。
 
 进一步阅读：[QEMU BSP README](../bsp/qemu-virt64-loongarch/README.md)、[LS2K1000LA / LS2K0300 README](../bsp/loongarch/ls2k1000/README.md)。
+
+2K0300 当前统一使用 `BSP_LS2K0300`，2K1000LA 使用 `BSP_LS2K1000LA`。
+2K0300 的配置集中在 `config/`，移植记录见 `bsp/loongarch/ls2k0300/IMPORT_NOTES.txt`。

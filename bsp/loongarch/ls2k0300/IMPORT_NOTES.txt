@@ -1,0 +1,165 @@
+LS2K0300 开发 BSP 迁移与验证记录
+日期：2026-10-27
+
+来源和范围
+
+参考仓库：/home/airxs/user/aicode/kernel/gitcode/rt-thread
+参考版本：a71982b3b6（迁移开始时的 HEAD）
+项目测试基线：0609c419b98d33ff448f6572049e6dd760d59e0e，加本次未提交修改。
+
+只从参考仓库取得 libcpu/loongarch/mach-loongson 和
+bsp/loongarch/ls2k300_dev 的源码；没有同步参考仓库的内核、组件、通用
+LoongArch 移植或 ls2kdev。合并后 BSP 已正式命名为 ls2k0300；原目录保留为 ls2k0300-deprecated。
+日常构建只使用新 ls2k0300，ls2k1000 保持独立。
+项目已有启动、Smart/SMP、页表、非对齐访问、USB、SD、显示适配继续保留。
+没有修改 QEMU 源码，没有操作实板串口或写入固件。
+
+最终目录
+
+libcpu/loongarch/common/              架构通用移植，保留项目实现
+libcpu/loongarch/mach/common/         原 ls2k/：共用 LIOINTC 与地址接口
+libcpu/loongarch/mach/include/ls2k0300/ 芯片定义和 MMIO 适配
+libcpu/loongarch/mach/ls2k0300/        参考冷启动汇编，未链接进 RAM 内核
+bsp/loongarch/ls2k0300/
+  drivers/boards/                    初始化、板级资源、显示/触摸、ALE 边界
+  drivers/usb/                       EHCI、MSC、UVC 底层与 USB 平台接口
+  drivers/sd/                        SDIO 主控制器和 RT-Thread 适配
+  drivers/power/                     保留项目现有复位接口行为
+  drivers/bsp/                       时钟、引脚复用、DMA、温度辅助接口
+  drivers/adc,gpio,i2c,pwm,rtc/       本次适配的外设驱动
+  drivers/spi,thermal,watchdog/      本次适配的外设驱动
+  drivers/ssd1306/                   I2C OLED 库；未连接实物验证
+  drivers/uart/                     参考实现，仅保留对照，未参与构建
+
+新 BSP 没有 drivers/net。按要求删除了重复的参考网络实现，使用项目
+bsp/loongarch/common/gmac；资源地址、中断和 DMA 限制由
+ls2k0300 的 drivers/boards/drv_platform.c 提供。
+UART 同样使用项目 bsp/loongarch/common/drv_uart.c，避免重复注册控制台。
+
+构建入口和保留项
+
+新目录的 SConstruct 使用项目现有 common/build.py。
+各驱动子目录使用独立 SConscript；USB/SD 保留原有配置开关。
+新增外设通过 BSP_DEV_* 显式开启，默认不接管未知板卡的引脚。
+I2C0..3 分别选择；与现有屏幕触摸适配互斥，避免同一控制器双重注册。
+SSD1306 默认使用 I2C1，因此其配置同时选择 I2C1。
+硬件 RTC 要求启用 RT_USING_RTC、关闭 RT_USING_SOFT_RTC。
+
+默认 config/rtt_defconfig 是标准版加自检命令，rtconfig.h 由项目 SCons/Kconfig
+工具生成。其他可选配置包括 standard、nano、smart、page、usb、
+sd_network、vanguard_camera。更改配置应复制 config/ 下对应 *_defconfig 为 .config，
+然后执行 scons --pyconfig-silent 和 scons；不能手工修改 rtconfig.h 宏。
+
+参考 drv_interrupt.c、UART、main_lwip_demo.c 未链接：它们会重复定义现有
+中断、串口或入口。参考 link_smart.lds 不作为链接入口，项目 link.lds
+继续负责 DMW/PAGE、向量和专用 DMA 区布局。
+冷启动汇编依赖参考 SPL 的 DDR/PLL/复位上下文；当前固件已初始化 DDR，
+禁止从 RAM 内核运行这些代码。此次不提供独立烧录到复位入口的 SPL。
+参考 drv_power.c 依赖不同的 idle/reset 接口，未直接启用；power 目录
+使用原项目复位接口，尚不承诺该开发 BSP 的软件重启或 PMIC 断电能力。
+
+适配过程中修正的问题
+
+1. MMIO 使用项目 DMW/PAGE 永久设备映射与读写屏障，不截断任意内核指针。
+   外设时钟读取当前固件 PLL/分频寄存器，避免固定假设 APB 为 200 MHz。
+2. GPIO 使用项目原始 LIOINTC 编号；修正当前 pin API 的参数类型、非法
+   引脚边界、105 号引脚分发边界及未初始化错误变量，attach 不自动开 IRQ。
+3. DMA 修正通道使能位、结构体清零、IRQ 确认、回调事件编号和完成状态。
+   检查通道、计数、数据宽度、地址对齐、32 位总线边界及合法地址别名。
+   DMA 映射修正字段位移和 CAN3 跨寄存器字段，拒绝越界映射编号，RMW
+   期间关闭本地中断。2K0300 BSP 限定单核；调用者仍负责独占 DMA 通道。
+4. DMA 缓冲区须由调用者预留并具有非缓存映射。PAGE 模式没有普通堆内存
+   的非缓存别名，不能把 malloc 指针换前缀后使用。测试曾因此触发页故障，
+   已改用链接脚本预留 DMA 区；没有放宽内核页表保护来掩盖错误。
+5. ADC 修正为 8 路、1.8 V 参考，增加互斥锁，避免线程交错改写通道配置。
+   测试通过设备 open/read/close，read 数量为样本数；不以 rt_adc_read
+   的零返回值掩盖转换失败。
+6. RTC 年寄存器是从 1900 年起的偏移；转换统一用 UTC。写入先设置年份，
+   再写月日，修复跨到闰年 2 月 29 日时被旧年份规范化的问题。
+7. 温度设备适配当前 sensor API，返回单位为 0.1 摄氏度，初始化完整配置。
+8. SPI 修正失效的锁类型，使用 RT-Thread SPI 总线互斥。SPI0/1 分频向上
+   选档，保证实际时钟不超过 max_hz；拒绝零频率、越界低频和当前 PIO
+   不支持的字宽/模式。参考 SPI DMA 分支未启用，不宣称已验证。
+9. 文件头保留原有许可证，OpenLANPU 作者/版权按要求更新为 LoongsonLab
+   与指定龙芯版权；文件头、描述、代码使用独立段落和空行。
+
+可重复测试
+
+测试文件位于主项目：
+  system/driver/tests/rtos/ls2k0300_dev_test.c
+  system/driver/tests/rtos/test_ls2k0300_dev.py
+
+示例（从 OpenLANPU 根目录运行，替换工具链/QEMU/DTB 路径）：
+
+python3 system/driver/tests/rtos/test_ls2k0300_dev.py \
+  --output /tmp/ls2k-dev-smart-new \
+  --toolchain /path/to/loongarch64-linux-musl/bin \
+  --profile smart --peripherals --run --host \
+  --qemu /path/to/qemu-system-loongarch64 \
+  --dtb /path/to/ls2k0300-vanguard-test.dtb
+
+每次使用新的输出目录。--profile page 测试 4 KiB 页表映射；standard
+测试标准版外设；nano 不加 --peripherals。--firmware 仅编译物理板配置，
+不会连接串口。--host 将已有 USB/SD sanitizer 用例指向新 usb/sd 目录。
+
+输出保存 build.log、tested.config、serial.log、commands.json、result.json，
+并记录 ELF SHA256。启动后检查明确的 PASS 标记，不以出现 shell 判定通过。
+负向 ADC、RTC、I2C、PWM 参数测试会产生预期错误日志，不等于整体失败。
+
+本次验证结果（输出目录 /tmp/loongson-import-20261027）
+
+final-smart       PASS：Smart DMW，外设组合连续 10 轮及内核回归
+final-page        PASS：Smart PAGE，外设组合连续 10 轮及内核回归
+final-standard    PASS：标准版，外设组合连续 10 轮及内核回归
+final-nano        PASS：Nano 启动、内核调度、内存对齐和 ALE 指令测试
+old-0300          PASS：原 BSP Smart 启动、内核和页表回归
+old-xingyun       BUILD_PASS：原 2K1000 Smart 双核配置编译，未上板运行
+final-camera      BUILD_PASS：新 BSP 物理板 USB 摄像头+SD+GMAC 组合编译
+默认标准配置     BUILD_PASS：保留物理板固件时钟设置
+
+每轮外设组合检查 RTC 闰日/非法日期、ADC 0..7、温度、I2C EEPROM
+重复读和无设备超时后恢复、SPI0 JEDEC ID 与分频/非法配置、GPIO 输出、
+PWM 设置/读取、看门狗超时设置，以及 DMA 8 通道 4 KiB 轮询和中断拷贝。
+10 轮共进行 160 次 DMA 拷贝，比较全部数据，测试结束停用通道并移除回调。
+
+内核回归：port_test 2000、memory_align_test（333075 项）、ale_test，
+Smart 另执行 kernel_map_test 8（32 MiB 映射读写，errors=0）。
+QEMU 对非对齐访存直接模拟，ALE recovered=0；这不能替代真实异常入口验证。
+
+主机回归：
+  原有 GMAC：双端口各 100000 帧、DMA 所有权、异常帧、队列回收通过。
+  共用 LIOINTC/UART：两个 SoC 地址、路由、中断确认、100000 字符通过。
+  新 sd/ 下实际引擎：ASan/UBSan，200 MiB 回读、边界、CRC、超时、回收通过。
+  新 usb/ 下实际引擎：ASan/UBSan，256 MiB 双向 DMA、控制/中断传输、
+  BOT、取消、断开、超时竞争、越界及 DMA 隔离通过。
+
+测试边界
+
+这些结果是指定 QEMU 模型和主机故障注入模型的结果，不是实板验收。
+没有验证实际 GPIO 电平/中断接线、ADC 电压精度、PWM 波形、备用 SPI/I2C
+端口、SSD1306 实物、看门狗复位、冷启动 DDR 或 USB 摄像头真实帧流。
+外设默认关闭，实板启用前须确认对应引脚、供电、时钟与触摸/显示资源占用。
+公共 sensor v1 仍有既存 64 位指针转换编译告警，本次没有修改公共组件。
+
+目录正式切换：原 ls2k0300 -> ls2k0300-deprecated，原 ls2k0300-dev -> ls2k0300。
+上面的 final-* 测试记录形成于正式切换前；切换后再做 promoted-* 验证。
+
+编译符号统一：2K0300 使用 BSP_LS2K0300，2K1000LA 使用 BSP_LS2K1000LA。
+设备定义、页表模式条件、GMAC 配置及 SCons 均使用这两个符号。
+不保留额外的开发版选择开关。三个 BSP 的 rtconfig.h 均通过 SCons 重新生成。
+
+配置文件统一放在 config/；BSP 根目录不保留 defconfig 副本或兼容软链接。
+首次 SCons/项目快照构建缺少 .config 时，从 config/rtt_defconfig 初始化。
+
+正式目录和标志切换后的复验
+
+promoted-smart：Smart DMW 外设 10 轮、调度、内存、页表 PASS；USB/SD 主机测试 PASS。
+promoted-page-config：从 config/page_defconfig 构建，PAGE 外设 10 轮及内核回归 PASS。
+promoted-camera-config：从 config/vanguard_camera_defconfig 构建，USB/SD/网络组合 PASS。
+promoted-xingyun-camera：BSP_LS2K1000LA、双核 Smart、网络/UVC 组合编译 PASS。
+fresh-config：删除私有快照 .config，验证 config/rtt_defconfig 自动初始化与编译 PASS。
+promoted-uvc-host：真实 UVC 工作线程的 100 次启动/停止、读写/poll、协商故障、
+热插拔代际、关闭回收、零堆泄漏及 iTD 连续传输通过 ASan/UBSan。
+promoted-clock：蜂鸟显示时钟、锁定失败、GMAC 时钟保留和 DVO 驱动设置回归 PASS。
+promoted-novaui-link：NovaUIOS 实际内核/显示集成构建 PASS；使用最小 ELF 作为
+仅链接检查载荷，没有执行该载荷，也不把此结果当作 GUI 实际运行验收。
