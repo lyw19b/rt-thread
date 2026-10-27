@@ -1,0 +1,250 @@
+File: IMPORT_NOTES.txt
+Author: LoongsonLab
+Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+SPDX-License-Identifier: Apache-2.0
+
+Description:
+    LS2K3000 Explorer implementation, offline checks and hardware boundaries.
+
+状态（2026-10-27）：已从 GRUB 单次启动标准单核内核，串口、内核测试、PCI
+读取及原生 reboot 命令实板通过。Smart 单核及八核均已启动并通过内核测试，HDMI 和细字体画面由用户确认正常。
+本目录独立于 ls2k0300，没有修改 RT-Thread 公共组件或 QEMU 源码。
+
+已实现
+--------
+1. UEFI 只读探测：GOP、PCI、BlockIo、SNP 和内存图，执行后返回固件。
+2. 自包含 EFI 加载器：嵌入内核，显式分配内核内存，保留资源和带校验的交接
+   数据；ExitBootServices 有限重试，成功后不再调用固件启动服务。
+3. 标准内核、Smart 单核、Smart 八核配置及独立构建工具。UART0、CPU 定时器、
+   内存分区和现有 LoongArch SMP/IPI 接口已接入。外设中断暂不启用。
+4. GOP framebuffer 注册为 lcd，保留 64 位地址、RGB/BGR 格式和实际行跨度；
+   支持明确的 32 位 PixelBitMask RGB/BGR 掩码；默认启动时显示系统状态、
+   核心数、分辨率、色条和四周边框。可通过
+   BSP_USING_BOOT_SCREEN 关闭；ls2k3000_display_test 重绘启动画面，
+   ls2k3000_colorbar 显示全屏色条。不提供原生 HDMI 设定模式、VSYNC 或翻页。
+5. 原生 Type0/Type1 PCI 配置读、固件 BAR 校验/映射、Command 修改。
+   不重新分配 BAR/桥窗口，不用写全 1 的方式探测 BAR 大小。
+6. 原生 NVMe 轮询驱动：一个控制器、首个活动命名空间、512/4096 字节扇区，
+   64 位 DMA/LBA、管理队列及 I/O 队列、错误完成项检查、超时停机。
+   注册 nvme0，默认只读；不自动格式化、不自动挂载、不访问分区内容。
+   每次只传输一个扇区，当前目标是可靠启动与读写验证，而非性能优化。
+7. 从 ACPI FADT 校验并保留探索者复位寄存器，提供 reboot 命令及
+   rt_hw_cpu_reset。只接受已验证的 MMIO 0x10150030、32 位、值 1；不猜测
+   未知固件的寄存器。该板固件 FADT 遗漏 RESET_REG_SUP，但 GAS 描述与
+   芯片手册 RST_CNT.OS_RST 和实板重启结果一致，因此采用明确的板级兼容处理。
+8. GMAC2 板级 lwIP 接口：PCI 资源匹配、固件 MAC、双端口独立 DMA 环、
+   PHY 链路轮询、2 秒复位上限及多通道 DMA 错误位处理。代码及八核配置编译
+   完成，尚未实板验证收发。共享 GMAC 引擎只增加可选超时/状态位配置，旧板
+   的零初始化默认行为保持原样。
+9. SD/eMMC 原生命令主机：drivers/sd，SD 1/4 位、eMMC 1/4/8 位 SDR，
+   CMD1/EXT_CSD、DMA bounce buffer、单块/多块传输、软件 STOP、超时隔离。
+   接入现有 MMC/SD 和块设备层，不修改公共组件。默认拒绝块写入和擦除；
+   不自动挂载，不暴露 eMMC boot/RPMB 分区。实际读写与电气时序待验证。
+10. HID 鼠标描述符解析器已有实现及主机单测，原生 xHCI HCD 和完整输入链路
+    尚未完成，不能据此认为 USB 鼠标已经可用。
+11. 单独保留主机故障注入测试和 QEMU 通用架构测试，见后文。
+
+内存及 DMA
+------------
+EFI 用 AllocateAddress/EfiLoaderData 申请物理 0x02000000 起的 224 MiB（当前 v3 交接协议）。
+申请不成功则返回固件，绝不直接覆盖未经分配的 RAM。
+  0x02000000..0x06000000：内核镜像及 BSS 的最大范围，链接时检查。
+  _end..0x09e00000：内核堆。
+  0x09e00000..0x0a000000：专用 DMA 池，不交给堆和页分配器。
+  0x0a000000..0x0fff0000：Smart 页分配器。
+  0x0fff0000..0x10000000：EFI 交接数据。
+第一阶段只使用上述保留区域，尚不把板载全部 4/8 GiB RAM 加入分配器。
+
+DMA 池在次核启动前核对 CPUCFG 缓存布局并清理主核继承的缓存别名，后续仅
+用非缓存地址访问。DMA 内存永久保留；超时后也不回收，避免设备迟到写入。
+NVMe 支持 64 位 DMA，当前低 DDR 地址是独立保留区的位置，不是地址截断。
+实板仍需确认 PCIe DMA 地址转换/IOMMU 状态、缓存一致性及冷启动行为。
+
+待实施/待验证，不计入已支持
+---------------------------
+- 长期压力与大量连续重启；单核/八核 UEFI 交接、64 MiB 申请及次核启动已验证。
+- 原生 HDMI 模式切换、VSYNC 与多屏选择；当前接管固件 GOP，已实板验证
+  1920x1080 输出，并由用户确认文字、色条和细字体正常。
+- NVMe Identify/扇区读取、断连及超时；写入默认关闭。13 个 PCI 设备的
+  固件清单与原生配置空间 ID 已全部比对一致。
+- 原生以太网收发、PHY：已接入但待实板验证。MSI/路由尚未接入。
+- 原生 USB xHCI HCD 和设备类：尚未接入此 BSP。
+- eMMC/SD 已接入但仍需确认输入时钟及 ACPI 资源，再做实板读写验证。
+- SATA SSD、原生显示控制、RTC/GPIO/I2C/电源管理：尚未接入此 BSP。
+- NovaUIOS 已完成单缓冲适配及通用 QEMU 八核运行。实板扩展内存版 EFI
+  停在固件 CODE 92，原因未确认，不能计为 NovaUIOS 实板启动通过。
+- 已通过实板的是旧 v2/64 MiB 内核；当前 v3/224 MiB 内存申请待实板确认。
+
+网络启动与内核网络是两个阶段：嵌入内核的 BOOTLOONGARCH64.EFI 可供固件
+网络启动路径加载，但 DHCP/TFTP/HTTP 等传输依赖实板 UEFI 能力，本次尚未
+验证。ExitBootServices 后不使用 SNP；不能把固件网络启动算作内核网卡支持。
+
+板卡依据
+--------
+主项目 boards/2k3000：
+  广东龙芯2K3000探索者用户手册v1.2.1.lnd25.pdf
+  龙芯2K3000_3B6000M处理器用户手册_V1.0（PDF，无扩展名）
+  G2K30Z1_V1.1.pdf
+
+手册：8 个 LA364E 核，标准 4 GiB LPDDR4，板载 eMMC、PCIe x4 NVMe、SATA、
+HDMI/eDP、USB3/USB2 和千兆网口。UART0 物理 0x1fe001e0、字节访问、100 MHz
+输入时钟，调试 Type-C 115200。默认上电后需要按 BOOT 开机；两灯仅表示通电。
+
+特别注意：
+  1. PCI BAR 及配置寄存器组基址由固件分配，不能套用手册中的分配示例。
+  2. PCI 配置地址不是标准 ECAM；offset[11:8] 分散到物理地址[27:24]。
+  3. 两组 USB 控制器 0014:7a44 和 0014:7a34 都是 xHCI，不能套用 EHCI。
+     当前项目 CherryUSB 的 xHCI 仅有 Phytium ARM 预编译库，不适用于 LoongArch。
+  4. Linux dwmac-loongson.c 指出 7a23 多通道版本有不同的 RX/TX 摘要及致命
+     错误位，且复位可能耗时近两秒。不能直接复用旧板 100 ms 复位/中断逻辑。
+  5. GOP 句柄不证明实际接口为 HDMI；实板必须确认所接输出和显示内容。
+
+构建
+----
+在主项目根目录执行，输出目录使用仓库之外的新目录：
+
+  python3 system/kernel/rt-thread/bsp/loongarch/ls2k3000/tools/build_kernel.py
+    --profile smart_smp --nvme --toolchain /path/to/loongarch-toolchain/bin
+    --output /tmp/ls2k3000-kernel
+
+以上折行参数需在同一条命令中执行。可选 profile：rtt、smart、smart_smp。
+--nvme 启用只读 NVMe，默认关闭。--test-source 可注入保留的内核验收测试，
+仅复制进构建快照。rtconfig.h 由 .config 经官方工具生成，不修改工作区配置。
+
+  python3 system/kernel/rt-thread/bsp/loongarch/ls2k3000/tools/build_uefi.py
+    --edk2 /path/to/edk2 --toolchain /path/to/loongarch-toolchain/bin
+    --kernel /tmp/ls2k3000-kernel/rt-thread/bsp/loongarch/ls2k3000/rtthread.elf
+    --output /tmp/ls2k3000-efi
+
+省略 --kernel 生成 LS2K3000-PROBE.EFI；指定后生成 BOOTLOONGARCH64.EFI。
+EDK II 仅提供 ABI 头文件。构建验证 LoongArch64 PE32+ 入口、段、重定位目录，
+拒绝需要 GOT/运行时 ELF 修复的代码，并记录源码和镜像 SHA256。
+不自动修改板上的启动项、磁盘文件或 SPI 固件。
+
+离线验证
+--------
+主项目 system/driver/tests/rtos 中保留：
+  test_ls2k3000_uefi_probe.py：协议缺失、枚举/分配失败、64 位资源、释放。
+  test_ls2k3000_uefi_loader.py：预留内存、复制、内存图、退出服务重试，
+      并断言退出开始后没有非法固件服务调用。
+  ls2k3000_boot_contract_test.c：校验、覆盖范围、描述符溢出、显存与内核重叠、
+      PCI 配置地址编码及非法参数。
+  test_ls2k3000_nvme.py / ls2k3000_nvme_test.c：运行生产 NVMe 队列代码，测试
+      512/4096 字节、64 位 DMA/LBA、命名空间非 1、Phase/CID 回绕、超时、
+      错误完成项、致命错误及格式拒绝。它是控制器夹具，不是真实 SSD。
+  ls2k3000_kernel_test.c：每核绑核运行 256 轮堆分配、数据校验、回收和共享
+      mutex 计数，同时验证定时唤醒。命令 ls2k3000_kernel_test，每次启动一次。
+  test_ls2k3000_display.py / ls2k3000_display_test.c：生产渲染代码的 RGB/BGR、
+      行填充、边界和 320x200 至 4K 尺寸检查，并输出预览图。
+  test_ls2k3000_qemu.py：用人工交接数据启动通用 QEMU virt；不执行 UEFI，
+      不模拟探索者 PCI 配置、USB、NVMe、HDMI 或网口。--framebuffer 提供
+      合成显存，启动后通过 QMP 读回检查边框、颜色和未被改写的行填充。
+  test_ls2k3000_offline.py：统一运行上述测试、三种配置编译与 EFI 打包。
+
+复现全部离线检查（折行参数需放在同一条命令中）：
+  python3 system/driver/tests/rtos/test_ls2k3000_offline.py
+    --edk2 /path/to/edk2 --toolchain /path/to/loongarch-toolchain/bin
+    --qemu /path/to/qemu-system-loongarch64 --output /tmp/ls2k3000-offline
+
+2026-10-27 加入启动显示后的结果：17 项离线检查通过。主机测试使用 ASan/UBSan；三种内核与 EFI
+构建通过，QEMU 单核/八核测试通过。八核在线 mask=0xff，256 轮/核共 2048 次；
+损坏交接数据被拒绝。此为功能回归，不能代替长期实板压力测试。
+
+后续实板执行顺序
+----------------
+继续扩展八核及 Smart 压力测试。确认 NVMe 硬件连接和链路后再测 Identify
+及扇区只读比较；当前没有可测试的 NVMe 端点。原生网卡和 USB xHCI 驱动
+依据本板 PCI/中断/DMA 资源逐项实现和验收。
+初次探测阶段只获取启动日志；后续内核上板涉及的测试文件与单次启动配置
+见末尾，未刷写 SPI 固件。
+
+2026-10-27 串口实测观察
+----------------------
+ttyUSB1，115200，USB 1a86 串口。固件 Loongson-FwSdk-V5.0.0343-stable2511，
+commit 520fefd5，编译日期 2026-03-10。固件报告 8 核、8 GiB RAM，显存窗口
+基址 0x200000000、窗口大小 2048 MiB；这不是已经确认的 GOP framebuffer。
+内存训练完成，显示初始化完成并到达 image boot start。固件记录 dev 9/13
+PCIe link train fail；尚未核对槽位中是否有设备，不能据此判定驱动故障。
+用户已从显示器进入 UEFI Shell；串口发送 ver 未见回显，控制台路由待确认。
+
+同日后续：Linux 4.19.0-19-loongson-3 下已通过同一串口执行 uname、id、
+ip、lsblk、lspci 等只读命令，确认串口双向通信正常。Linux 的 enp0s3f0
+获得 192.168.0.41；/dev/mmcblk0p1 为 300 MiB FAT EFI 分区，挂载于
+/boot/efi。PCI 清单包含 7a23 网卡、7a44/7a34 USB 控制器、7a46 显示设备
+和 7a18 SATA 控制器，未列出 NVMe 端点；这不是 RT-Thread 驱动验收结果。
+随后重启已由用户确认为手动操作。UEFI DHCP 获得 192.168.0.42，主机 ping
+成功；用户确认存在 FS0，但尚未核实其完整设备路径。UEFI Shell 仍未回应
+串口命令；串口发送 TFTP 命令后，服务器未收到下载请求。EFI 尚未执行。
+
+2026-10-27 首次内核上板及重启
+----------------------------
+Linux 串口 root 登录后，通过局域网 HTTP 上传 EFI，并在下载目录及 EFI 分区
+分别执行 SHA-256 校验。镜像目录 /boot/efi/EFI/RTT-2K3000-20261027 及其
+-v2/-v3 版本目录仅存放测试文件。原 GRUB 配置、环境及 EFI 引导程序备份于
+板上 /root/ls2k3000-test-20261027；未替换原 Linux 或 SPI 固件。
+
+/boot/grub/custom.cfg 增加独立 chainloader 测试入口。grub-reboot 设置
+next_entry，仅下一次启动测试；原默认项保持 Linux。启动路径是：
+  Linux 下载/校验 -> reboot -> UEFI -> GRUB -> 内嵌内核的 EFI -> RT-Thread。
+并非在 Linux 进程中运行 RT-Thread。EFI ExitBootServices 后进入原生内核。
+
+标准单核版：mask=0x1，256 轮堆分配/回收、共享锁和定时唤醒测试 PASS；
+13 个 PCI 设备的 firmware/live ID 全部一致。没有发现 NVMe 端点，不能据此
+宣称 SSD 已验证。第二版 handoff v2 保存 GOP 原始参数和 ACPI 复位信息。
+已实际执行 reboot：打印 RST_CNT.OS_RST 后立即出现 UEFI 启动日志，随后
+回到 Linux，确认无需手动复位；GRUB next_entry 已清空。
+
+HDMI 首轮缺画面的软件原因：GOP status=0，handles=2；固件显存物理地址
+0x4000000000，大小 8294400 字节，1920x1080，stride=1920，format=2
+(PixelBitMask)，掩码 R=00ff0000、G=0000ff00、B=000000ff、保留=ff000000。
+旧加载器只接受 format 0/1，把有效模式丢弃。现保留原始诊断，并将明确的
+32 位 RGB/BGR 掩码规范化；未知掩码、重叠掩码或不明确的 24 位布局仍拒绝。
+补充加载器故障注入与 ACPI 校验测试后，17 项离线检查再次全部通过。
+新版 Smart 单核已经上板，串口报告 DISPLAY: startup screen 1920x1080
+stride=1920 format=1。256 轮内核测试 PASS，堆使用 72960 字节、历史峰值
+87520 字节。用户已确认 HDMI 画面正常、文字和色条清晰。
+
+字体及当前测试边界
+------------------
+用户反馈测试字体太粗，已将等比例放大的实心像素块改为较细的连通笔画，
+字形宽高比例、字符间距与页面布局保持不变。1280x720 预览已检查，全部
+17 项离线测试再次通过。细字体版已在主机准备；上传前 CH340 串口设备从
+主机消失，Linux 地址也不响应，所以这版尚未上板，八核实板测试尚未开始。
+Smart 单核 reboot 也已实际成功，日志显示正常返回 UEFI 并启动原 Linux。
+当前变更均限于本 BSP 及项目测试代码，没有修改 RT-Thread 公共组件。
+
+2026-10-27 细字体及八核上板
+--------------------------
+串口恢复后，v4 镜像通过 Linux HTTP 下载并完成双重 SHA-256 校验，单次
+启动入口选择 Smart 八核。实板日志 SMP: 8 CPUs online (mask 0xff)。
+每核 256 轮的内存写入/读回/回收、共享 mutex 计数与定时唤醒全部通过：
+  KERNEL_TEST PASS: cpus=8 rounds=256 total=2048 ticks=32
+测试后堆使用 72960 字节、历史峰值 172096 字节；八个 idle 线程均存在。
+用户确认细字体“粗细合适，显示清晰”。该阶段为启动及功能验收，不等同于
+长时间稳定性认证。NVMe 驱动报告无固件 PCI 端点，未进行 SSD 读写。
+八核版执行 reboot 后再次出现完整 UEFI 日志并返回 Linux，单次启动标记
+清空。重新选择同一份镜像后第二次八核启动成功，mask=0xff，2048 轮测试
+再次全部通过。板卡当前保持细字体版 Smart 八核运行；默认启动项仍为原
+Linux。两次短时功能测试不能代替后续长时间压力测试。
+
+2026-10-27 驱动增补（实现先行，实板验证延后）
+--------------------------------------------
+八核 Smart 同时启用 --mmc --network --nvme 的隔离构建通过。
+该结论只覆盖编译与链接，不代表外设功能验证通过，未部署到开发板。
+
+SD/eMMC 使用说明：
+  python3 tools/build_kernel.py --profile smart_smp --toolchain <bin> \
+      --output <新的外部目录> --mmc --mmc-clock <已确认的输入频率>
+
+--mmc-clock 默认 0，只编入驱动，不访问未确认时钟的控制器。
+PCI 枚举匹配 0014:7a88（eMMC）、0014:7a48（SD）。当前实板固件把这两个
+设备隐藏为 PRP0001 ACPI 节点，旧 Linux 日志对应资源为 0x79990000、0x79991000。
+BSP_LS2K3000_MMC_ACPI_STATIC 允许显式使用已核对的 ACPI 地址，不解析 AML，
+不盲扫 MMIO。地址默认 0；换固件后必须重新核对，不能把日志值当固定硬件地址。
+已确认的资源可在隔离快照 .config 中设置，再用 scons --pyconfig-silent 生成。
+
+初版最高 25 MHz SDR，不启用高速调谐、DDR、1.8 V 切换、SDIO 功能设备或卡拔出。
+SD 应在启动前插入；空主机可用 ls2k3000_mmc_rescan <索引> 重新扫描。
+ls2k3000_mmc_status 输出每个主机的卡状态、频率、位宽、请求/错误及最后命令。
+BSP_LS2K3000_MMC_ALLOW_WRITE 默认 n；确认目标与备份之后再启用写入验证。
+电源、引脚复用和电压暂由固件设置，不能把 eMMC 8 位能力当作 SD 8 位能力。
