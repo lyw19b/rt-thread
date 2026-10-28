@@ -45,10 +45,15 @@ def main():
                         help='Compile SPI, I2C, RTC, GPIO, PWM, HPET and watchdog')
     parser.add_argument('--test-source', type=Path, help='Inject a retained C acceptance test')
     parser.add_argument('--novaui', type=Path, help='Embed a native 1920x1080 Smart UI ELF')
+    parser.add_argument('--gop-wide-writes', action='store_true',
+                        help='Use aligned 64-bit pixel pairs on Explorer GOP memory')
     args = parser.parse_args()
 
     if args.novaui and args.profile == 'rtt':
         parser.error('--novaui requires Smart')
+
+    if args.gop_wide_writes and not args.novaui:
+        parser.error('--gop-wide-writes requires --novaui')
 
     if args.usb_camera and args.profile == 'rtt':
         parser.error('--usb-camera requires Smart')
@@ -161,6 +166,9 @@ def main():
 
         env['NOVAUI_RTOS_DIR'] = str(ui_snapshot / 'platform/rtos')
         with (board / '.config').open('a') as config:
+            if args.gop_wide_writes:
+                config.write('\nCONFIG_BSP_NOVAUI_GOP_WRITE64=y\n')
+
             config.write('\nCONFIG_BSP_USING_NOVAUI=y\n'
                          'CONFIG_BSP_NOVAUI_OPTIONAL_TOUCH=y\n'
                          'CONFIG_BSP_NOVAUI_SINGLE_BUFFER=y\n'
@@ -198,6 +206,7 @@ def main():
                 'network': args.network, 'peripherals': args.peripherals,
                 'usb_mouse': args.usb_mouse or args.usb_camera,
                 'usb_camera': args.usb_camera,
+                'gop_wide_writes': args.gop_wide_writes,
                 'novaui_sha256': (hashlib.sha256(args.novaui.read_bytes()).hexdigest()
                                   if args.novaui else None),
                 'test_source_sha256': (hashlib.sha256(args.test_source.read_bytes()).hexdigest()

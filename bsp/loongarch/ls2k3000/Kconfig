@@ -76,6 +76,15 @@ config BSP_USING_PCI_INVENTORY
     bool "Inspect firmware PCI resources"
     default y
 
+config BSP_NOVAUI_GOP_WRITE64
+    bool "Use aligned 64-bit GOP framebuffer writes"
+    depends on BSP_USING_NOVAUI && BSP_NOVAUI_SINGLE_BUFFER
+    default n
+    help
+        Pair pixels when writing Explorer GOP framebuffer memory. Preserve
+        32-bit leading/trailing pixels and row padding. This setting is only
+        for framebuffer memory; it must not be used for register windows.
+
 config BSP_USING_DMA_POOL
     bool
 

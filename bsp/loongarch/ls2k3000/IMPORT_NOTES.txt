@@ -851,3 +851,21 @@ DMA已用1576960/2097152字节；鼠标专用构建也包含ISO预留，是已�
 ASan/UBSan覆盖40960载荷、40启停、128完成项批量回收、队列溢出、热拔隔离，
 以及20000鼠标报告/200重连；完整Smart8+UI+camera+网络+SD/eMMC交叉编译通过。
 首轮EFI SHA256：9d4210076e8f08acfa54f8232edb3092c305778aff9c30fb88730fa8d5fb1a44。
+
+
+2026-10-28：GOP 提交与相机缩放性能
+--------------------------------
+BSP_NOVAUI_GOP_WRITE64（--gop-wide-writes）选择仅用于GOP显存的对齐64位
+像素对写入；普通32位路径保留。用户复制完成后才提交，奇数首尾和padding不变。
+保留examples/test/ls2k3000_gop_copy_test.c，在novaui_stop后执行；
+320项真实显存读回检查PASS，mismatches=0，restore_errors=0。
+
+主项目通过LVGL已有图像钩子加速相机640x480到1280x960的精确两倍缩放，
+保持原抗锯齿像素结果，未修改公共LVGL源。128组真实LVGL差分和ASan/UBSan通过。
+实板原版约9.5FPS；仅64位写约12.4FPS；两项组合约18.6FPS。
+每帧绘制49ms→约21.5ms，提交54ms→约30.2ms；不是改变显示的FPS数字。
+组合EFI：386297db700a7b545af76a8b9821f24ba8abfc150168fd34fc3c9f6a2f017919。
+
+宽写版本相机并发下：SD/eMMC各36MiB只读校验通过，冷ARP窗口16的10000包UDP
+及16MiB TCP全部校验通过；结束时相机10256帧、传输/载荷/溢出错误0，
+ISO 2737926包、errors/dropped/missed为0。早先有错误的一轮仍保留在主项目bug014。
