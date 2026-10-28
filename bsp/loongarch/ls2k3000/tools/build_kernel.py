@@ -39,6 +39,8 @@ def main():
     parser.add_argument('--network', action='store_true', help='Compile GMAC2/lwIP support')
     parser.add_argument('--usb-mouse', action='store_true',
                         help='Compile native xHCI USB2 mouse input')
+    parser.add_argument('--usb-camera', action='store_true',
+                        help='Compile native xHCI USB2 ISO camera and mouse input')
     parser.add_argument('--peripherals', action='store_true',
                         help='Compile SPI, I2C, RTC, GPIO, PWM, HPET and watchdog')
     parser.add_argument('--test-source', type=Path, help='Inject a retained C acceptance test')
@@ -47,6 +49,9 @@ def main():
 
     if args.novaui and args.profile == 'rtt':
         parser.error('--novaui requires Smart')
+
+    if args.usb_camera and args.profile == 'rtt':
+        parser.error('--usb-camera requires Smart')
 
     if (args.emmc_base or args.sd_base) and (not args.mmc or not args.mmc_clock):
         parser.error('Explicit MMC resources require --mmc and a verified --mmc-clock')
@@ -112,9 +117,13 @@ def main():
                          'CONFIG_SAL_USING_POSIX=y\n'
                          'CONFIG_RT_SYSTEM_WORKQUEUE_STACKSIZE=4096\n')
 
-    if args.usb_mouse:
+    if args.usb_mouse or args.usb_camera:
         with (board / '.config').open('a') as config:
             config.write('\nCONFIG_BSP_USING_USB_MOUSE=y\n')
+
+    if args.usb_camera:
+        with (board / '.config').open('a') as config:
+            config.write('\nCONFIG_BSP_USING_USB_CAMERA=y\n')
 
     if args.peripherals:
         with (board / '.config').open('a') as config:
@@ -127,6 +136,15 @@ def main():
     env['RTT_EXEC_PATH'] = str(args.toolchain.resolve())
     env['RTT_CC_PREFIX'] = 'loongarch64-linux-musl-'
     env.pop('MKIMAGE', None)
+
+    if args.usb_camera:
+        camera_source = RTT.parents[1] / 'driver'
+        camera_snapshot = output / 'driver'
+
+        for directory in ('rtos/camera', 'include'):
+            shutil.copytree(camera_source / directory, camera_snapshot / directory, ignore=ignore)
+
+        env['LS2K3000_CAMERA_DIR'] = str(camera_snapshot / 'rtos/camera')
 
     if args.novaui:
         application = args.novaui.resolve()
@@ -178,7 +196,8 @@ def main():
                 'nvme': args.nvme, 'mmc': args.mmc, 'mmc_clock': args.mmc_clock,
                 'emmc_base': hex(args.emmc_base), 'sd_base': hex(args.sd_base),
                 'network': args.network, 'peripherals': args.peripherals,
-                'usb_mouse': args.usb_mouse,
+                'usb_mouse': args.usb_mouse or args.usb_camera,
+                'usb_camera': args.usb_camera,
                 'novaui_sha256': (hashlib.sha256(args.novaui.read_bytes()).hexdigest()
                                   if args.novaui else None),
                 'test_source_sha256': (hashlib.sha256(args.test_source.read_bytes()).hexdigest()

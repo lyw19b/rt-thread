@@ -10,9 +10,19 @@
 #   Build the board-owned polling xHCI transport and HID mouse adapter.
 
 from building import *
+import rtconfig
 
 cwd = GetCurrentDir()
-group = DefineGroup('LS2K3000 USB mouse', Glob('*.c'),
-                    depend=['BSP_USING_USB_MOUSE'], CPPPATH=[cwd],
+sources = Glob('*.c')
+paths = [cwd]
+
+if GetDepend('BSP_USING_USB_CAMERA'):
+    usb = os.path.join(rtconfig.RTT_ROOT, 'components', 'drivers', 'usb', 'cherryusb')
+    paths += [os.path.join(usb, name) for name in ['common', 'core', 'class/hub']]
+else:
+    SrcRemove(sources, ['drv_usb_camera.c'])
+
+group = DefineGroup('LS2K3000 USB host', sources,
+                    depend=['BSP_USING_USB_MOUSE'], CPPPATH=paths,
                     LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
 Return('group')

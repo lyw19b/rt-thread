@@ -10,7 +10,7 @@
 
 /*
  * Description:
- *   Provide a serialized, polling xHCI transport for root-port USB2 mice.
+ *   Provide serialized xHCI USB2 root-port mouse and HS camera transports.
  */
 
 #ifndef LS2K3000_XHCI_MOUSE_H
@@ -23,6 +23,14 @@
 #define LS_XHCI_EVENTS 256U
 #define LS_XHCI_SCRATCHPADS 32U
 #define LS_XHCI_BUFFER_BYTES 4096U
+#define LS_XHCI_DEVICES 2U
+#define LS_XHCI_ISO_TDS 128U
+#define LS_XHCI_ISO_RING_TRBS 256U
+#define LS_XHCI_ISO_USABLE (LS_XHCI_ISO_RING_TRBS - 1)
+#define LS_XHCI_ISO_QUEUE 128U
+#define LS_AGAIN (-8)
+#define LS_XHCI_CLASS_MOUSE 1U
+#define LS_XHCI_CLASS_CAMERA 2U
 
 struct ls_xhci_trb
 {
@@ -32,21 +40,30 @@ struct ls_xhci_trb
     uint32_t control;
 };
 
-/* Permanently reserved coherent memory. Never free on a failed hardware stop. */
+/* One device owns its endpoint-zero context and transfer buffers. */
+struct ls_xhci_device_dma
+{
+    struct ls_xhci_trb ep0[LS_XHCI_RING_TRBS] __attribute__((aligned(4096)));
+    struct ls_xhci_trb interrupt[LS_XHCI_RING_TRBS] __attribute__((aligned(4096)));
+    uint8_t output_context[32 * 64] __attribute__((aligned(64)));
+    uint8_t input_context[33 * 64] __attribute__((aligned(64)));
+    uint8_t transfer[LS_XHCI_BUFFER_BYTES] __attribute__((aligned(4096)));
+    uint8_t report[128] __attribute__((aligned(64)));
+};
+
+/* Permanently reserved coherent memory. Never free on a failed hardware stop.
+ * A controller can host two devices and one HS camera stream concurrently. */
 struct ls_xhci_dma
 {
     uint64_t dcbaa[256] __attribute__((aligned(4096)));
     struct ls_xhci_trb command[LS_XHCI_RING_TRBS] __attribute__((aligned(4096)));
     struct ls_xhci_trb event[LS_XHCI_EVENTS] __attribute__((aligned(4096)));
-    struct ls_xhci_trb ep0[LS_XHCI_RING_TRBS] __attribute__((aligned(4096)));
-    struct ls_xhci_trb interrupt[LS_XHCI_RING_TRBS] __attribute__((aligned(4096)));
     uint32_t erst[4] __attribute__((aligned(64)));
-    uint8_t output_context[32 * 64] __attribute__((aligned(64)));
-    uint8_t input_context[33 * 64] __attribute__((aligned(64)));
-    uint8_t transfer[LS_XHCI_BUFFER_BYTES] __attribute__((aligned(4096)));
-    uint8_t report[128] __attribute__((aligned(64)));
+    struct ls_xhci_device_dma device[LS_XHCI_DEVICES];
     uint64_t scratch_pointer[LS_XHCI_SCRATCHPADS] __attribute__((aligned(64)));
     uint8_t scratch[LS_XHCI_SCRATCHPADS][4096] __attribute__((aligned(4096)));
+    struct ls_xhci_trb iso[LS_XHCI_ISO_RING_TRBS] __attribute__((aligned(4096)));
+    uint8_t iso_payload[LS_XHCI_ISO_TDS][4096] __attribute__((aligned(4096)));
 };
 
 struct ls_xhci_ops
@@ -63,6 +80,43 @@ struct ls_xhci_ring
 {
     unsigned int enqueue;
     unsigned int cycle;
+};
+
+struct ls_xhci_device
+{
+    struct ls_xhci_device_dma *dma;
+    struct ls_xhci_ring ep0;
+    struct ls_xhci_ring interrupt;
+    uint8_t slot, port, speed, endpoint;
+    uint8_t interface_number, configuration, interval, kind;
+    uint16_t packet_bytes, vendor, product;
+    struct ls_mouse_layout layout;
+    uint64_t control_trbs[3];
+    uint64_t pending_interrupt;
+    unsigned int control_complete, control_code, control_bytes, control_length;
+    unsigned int interrupt_ready, interrupt_bytes, connected;
+    uint32_t generation;
+    uint8_t device_descriptor[18];
+    uint16_t raw_config_length;
+    uint8_t raw_config[LS_XHCI_BUFFER_BYTES];
+};
+
+struct ls_xhci_iso_packet
+{
+    int result;
+    uint8_t bytes[3072];
+};
+
+struct ls_xhci_iso
+{
+    struct ls_xhci_device *device;
+    unsigned int endpoint, packet_bytes, capacity, interval;
+    unsigned int running, stopping, enqueue, cycle, payload_enqueue;
+    unsigned int head, count;
+    uint64_t pending[LS_XHCI_ISO_USABLE];
+    uint8_t buffer_index[LS_XHCI_ISO_USABLE];
+    struct ls_xhci_iso_packet queue[LS_XHCI_ISO_QUEUE];
+    uint64_t packets, errors, dropped, missed;
 };
 
 struct ls_xhci
@@ -115,12 +169,28 @@ struct ls_xhci
     uint64_t errors;
     uint64_t timeouts;
     uint64_t malformed;
+    unsigned int max_slots;
+    struct ls_xhci_device devices[LS_XHCI_DEVICES];
+    struct ls_xhci_iso iso;
 };
 
-/* One owner thread must serialize all calls and all ring access. Callback does
+/* The caller serializes all calls and all ring access. Motion callbacks must
  * not reenter this API. Polling sleeps yield the CPU; no kernel spinlock is held. */
 int ls_xhci_start(struct ls_xhci *host);
 int ls_xhci_stop(struct ls_xhci *host);
 int ls_xhci_poll(struct ls_xhci *host);
+
+/* All operations require the same serialized owner as poll. The device pointer
+ * is stable, but generation changes after unplug/re-enumeration. Class attach
+ * and detach notifications must be delivered after releasing the owner lock. */
+int ls_xhci_control(struct ls_xhci *host, struct ls_xhci_device *device,
+                    uint8_t request_type, uint8_t request, uint16_t value,
+                    uint16_t index, void *data, uint16_t length,
+                    unsigned int timeout_ms);
+int ls_xhci_iso_start(struct ls_xhci *host, struct ls_xhci_device *device,
+                      uint8_t endpoint, uint16_t packet, uint8_t interval);
+int ls_xhci_iso_read(struct ls_xhci *host, struct ls_xhci_device *device,
+                     uint8_t *data, size_t capacity);
+int ls_xhci_iso_stop(struct ls_xhci *host, struct ls_xhci_device *device);
 
 #endif

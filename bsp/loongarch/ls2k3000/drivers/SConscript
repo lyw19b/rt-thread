@@ -10,6 +10,7 @@
 #   Keep each board device in its own directory.
 
 from building import *
+import rtconfig
 
 cwd = GetCurrentDir()
 group = DefineGroup('LS2K3000 interfaces', [], depend=[''],
@@ -20,6 +21,12 @@ group = DefineGroup('LS2K3000 interfaces', [], depend=[''],
 for directory in ('boards', 'display', 'pcie', 'storage', 'sd', 'net', 'power',
                   'i2c', 'spi', 'rtc', 'gpio', 'pwm', 'timer', 'usb'):
     group += SConscript(os.path.join(directory, 'SConscript'))
+
+if GetDepend('BSP_USING_USB_CAMERA'):
+    camera_dir = os.environ.get('LS2K3000_CAMERA_DIR',
+        os.path.abspath(os.path.join(rtconfig.RTT_ROOT, '..', '..', 'driver', 'rtos', 'camera')))
+    group += SConscript(os.path.join(camera_dir, 'SConscript'),
+                        variant_dir='camera', duplicate=0)
 
 if GetDepend('BSP_USING_NOVAUI'):
     ui_dir = os.environ['NOVAUI_RTOS_DIR']

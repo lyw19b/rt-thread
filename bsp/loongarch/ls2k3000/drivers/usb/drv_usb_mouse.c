@@ -20,6 +20,7 @@
 #include "ls2k3000_pci.h"
 #include "xhci_mouse.h"
 #include "mouse_pointer.h"
+#include "ls2k3000_usb.h"
 
 #define MOUSE_HOSTS 2U
 
@@ -45,6 +46,16 @@ static int64_t wheel_total;
 static uint32_t buttons;
 static unsigned int host_count;
 static unsigned int registered;
+
+void ls2k3000_usb_lock(void)
+{
+    rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
+}
+
+void ls2k3000_usb_unlock(void)
+{
+    rt_mutex_release(&host_lock);
+}
 
 static uint32_t hardware_read(void *context, uint32_t offset)
 {
@@ -205,6 +216,9 @@ static void mouse_thread(void *argument)
             }
 
             rt_mutex_release(&host_lock);
+#ifdef BSP_USING_USB_CAMERA
+            ls2k3000_usb_camera_poll(controller);
+#endif
             rt_thread_mdelay(1);
         }
 
@@ -311,7 +325,11 @@ static int mouse_init(void)
         return -RT_ENOSYS;
     }
 
+#ifdef BSP_USING_USB_CAMERA
+    thread = rt_thread_create("usb_host", mouse_thread, RT_NULL, 8192, 15, 5);
+#else
     thread = rt_thread_create("usb_mouse", mouse_thread, RT_NULL, 8192, 24, 5);
+#endif
 
     if (!thread)
     {
@@ -364,6 +382,14 @@ static long ls2k3000_mouse_status(void)
         uint64_t errors;
         uint64_t timeouts;
         uint64_t malformed;
+#ifdef BSP_USING_USB_CAMERA
+        unsigned int iso_running;
+        unsigned int iso_queued;
+        uint64_t iso_packets;
+        uint64_t iso_errors;
+        uint64_t iso_dropped;
+        uint64_t iso_missed;
+#endif
     } status[MOUSE_HOSTS];
     struct ls_mouse_point current;
     uint32_t current_buttons;
@@ -393,6 +419,10 @@ static long ls2k3000_mouse_status(void)
             host->running, host->connected, host->slot, host->port,
             host->vendor, host->product, host->quarantined, hosts[index].last_result,
             host->reports, host->errors, host->timeouts, host->malformed,
+#ifdef BSP_USING_USB_CAMERA
+            host->iso.running, host->iso.count, host->iso.packets,
+            host->iso.errors, host->iso.dropped, host->iso.missed,
+#endif
         };
     }
 
@@ -404,6 +434,14 @@ static long ls2k3000_mouse_status(void)
     for (unsigned int index = 0; index < host_count; ++index)
     {
         const struct mouse_status *host = &status[index];
+
+#ifdef BSP_USING_USB_CAMERA
+        rt_kprintf("xHCI%u ISO: running=%u queued=%u packets=%lu errors=%lu "
+                   "dropped=%lu missed=%lu\n", index, host->iso_running,
+                   host->iso_queued, (unsigned long)host->iso_packets,
+                   (unsigned long)host->iso_errors, (unsigned long)host->iso_dropped,
+                   (unsigned long)host->iso_missed);
+#endif
 
         rt_kprintf("xHCI%u: running=%u connected=%u slot=%u port=%u id=%04x:%04x "
                    "reports=%lu errors=%lu timeouts=%lu malformed=%lu quarantine=%u last_result=%d\n",

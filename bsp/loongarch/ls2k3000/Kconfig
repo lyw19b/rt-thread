@@ -92,6 +92,18 @@ config BSP_USING_USB_MOUSE
         click and drag. Firmware supplies controller resources and port power.
         Hub routing and USB3 devices are not supported by this initial driver.
 
+config BSP_USING_USB_CAMERA
+    bool "Native xHCI USB2 UVC camera"
+    depends on RT_USING_SMART && RT_USING_DFS_V2
+    depends on RT_USING_DFS_DEVFS && RT_USING_POSIX_DEVIO && RT_USING_POSIX_POLL
+    depends on RT_TICK_PER_SECOND >= 1000
+    select BSP_USING_USB_MOUSE
+    default n
+    help
+        One directly connected high-speed ISO IN camera, sharing xHCI with
+        a mouse. Reuse the project UVC class and /dev/video0; retain private
+        bounded DMA and copied payloads. Bulk, hubs and USB3 are not supported.
+
 config BSP_USING_NVME
     bool "NVMe SSD (one namespace, polled queues)"
     select BSP_USING_DMA_POOL
