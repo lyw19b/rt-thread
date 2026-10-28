@@ -37,7 +37,8 @@ Description:
    芯片手册 RST_CNT.OS_RST 和实板重启结果一致，因此采用明确的板级兼容处理。
 8. GMAC2 板级 lwIP 接口：PCI 资源匹配、固件 MAC、双端口独立 DMA 环、
    PHY 链路轮询、2 秒复位上限及多通道 DMA 错误位处理。代码及八核配置编译
-   完成，尚未实板验证收发。共享 GMAC 引擎只增加可选超时/状态位配置，旧板
+   完成，已实板验证 DHCP、ping、UDP 单包与 TCP 校验，突发限制见文末。共享
+   GMAC 引擎只增加可选超时/状态位配置，旧板
    的零初始化默认行为保持原样。
 9. SD/eMMC 原生命令主机：drivers/sd，SD 1/4 位、eMMC 1/4/8 位 SDR，
    CMD1/EXT_CSD、DMA bounce buffer、单块/多块传输、软件 STOP、超时隔离。
@@ -49,35 +50,38 @@ Description:
 
 内存及 DMA
 ------------
-EFI 用 AllocateAddress/EfiLoaderData 申请物理 0x02000000 起的 224 MiB（当前 v3 交接协议）。
+EFI 用 AllocateAddress/EfiLoaderData 申请物理 0x02000000 起的 192 MiB（当前 v5 交接协议）。
 申请不成功则返回固件，绝不直接覆盖未经分配的 RAM。
   0x02000000..0x06000000：内核镜像及 BSS 的最大范围，链接时检查。
-  _end..0x09e00000：内核堆。
-  0x09e00000..0x0a000000：专用 DMA 池，不交给堆和页分配器。
-  0x0a000000..0x0fff0000：Smart 页分配器。
-  0x0fff0000..0x10000000：EFI 交接数据。
+  _end..0x07e00000：内核堆。
+  0x07e00000..0x08000000：专用 DMA 池，不交给堆和页分配器。
+  0x08000000..0x0dff0000：Smart 页分配器（96 MiB 减去交接区）。
+  0x0dff0000..0x0e000000：EFI 交接数据。
 第一阶段只使用上述保留区域，尚不把板载全部 4/8 GiB RAM 加入分配器。
 
 DMA 池在次核启动前核对 CPUCFG 缓存布局并清理主核继承的缓存别名，后续仅
-用非缓存地址访问。DMA 内存永久保留；超时后也不回收，避免设备迟到写入。
+用缓存一致性地址访问。实板还核对芯片 0x1fe00470 为已验证的固件策略值 0；
+其他策略不改寄存器，停用 DMA 分配并保留控制台。DMA 内存永久保留，超时后
+也不回收，避免设备迟到写入。旧版非缓存访问导致 GMAC 描述符更新不可见，
+因此不能继续沿用旧板的非缓存 DMA 池约定。
 NVMe 支持 64 位 DMA，当前低 DDR 地址是独立保留区的位置，不是地址截断。
 实板仍需确认 PCIe DMA 地址转换/IOMMU 状态、缓存一致性及冷启动行为。
 
 待实施/待验证，不计入已支持
 ---------------------------
-- 长期压力与大量连续重启；单核/八核 UEFI 交接、64 MiB 申请及次核启动已验证。
+- 长期压力与大量连续重启仍待验证；旧版 64 MiB 和新版八核 192 MiB 交接已验证。
 - 原生 HDMI 模式切换、VSYNC 与多屏选择；当前接管固件 GOP，已实板验证
   1920x1080 输出，并由用户确认文字、色条和细字体正常。
 - NVMe Identify/扇区读取、断连及超时；写入默认关闭。13 个 PCI 设备的
   固件清单与原生配置空间 ID 已全部比对一致。
-- 原生以太网收发、PHY：已接入但待实板验证。MSI/路由尚未接入。
+- 原生以太网已通过本轮基本收发及数据校验，UDP 突发仍有限制。MSI/路由尚未接入。
 - 原生 USB xHCI HCD 和设备类：尚未接入此 BSP。
-- eMMC/SD 已接入但仍需确认输入时钟及 ACPI 资源，再做实板读写验证。
+- eMMC/SD 时钟及 ACPI 资源已确认，但实板 DMA 数据路径未通过，详见文末。
 - SATA SSD、原生显示控制、完整电源管理：尚未接入此 BSP。
 - SPI/I2C/RTC/GPIO/PWM/看门狗及 HPET 计数接口已接入，实板验证边界见下文。
 - NovaUIOS 已完成单缓冲适配及通用 QEMU 八核运行。实板扩展内存版 EFI
-  停在固件 CODE 92，原因未确认，不能计为 NovaUIOS 实板启动通过。
-- 已通过实板的是旧 v2/64 MiB 内核；当前 v3/224 MiB 内存申请待实板确认。
+  曾停在固件 CODE 92；v5 已完成 1080p 八核实板启动，详见文末。
+- v4/192 MiB 已通过实板八核启动及 2048 轮内存/锁/timer 检查；见文末。
 
 网络启动与内核网络是两个阶段：嵌入内核的 BOOTLOONGARCH64.EFI 可供固件
 网络启动路径加载，但 DHCP/TFTP/HTTP 等传输依赖实板 UEFI 能力，本次尚未
@@ -378,7 +382,8 @@ libcpu 或 QEMU。寄存器操作按芯片手册实现，硬件引擎与 RT-Thre
     读取 RTC，并等待确认递增；读取 SPI0/1 CS0 JEDEC ID；读取 I2C0 0x50 SPD。
     SPD 操作只有地址指针设置和数据读取，不写 EEPROM 数据。
     验证非法 I2C 地址被拒绝；不可用设备明确打印 UNAVAILABLE。
-    该命令针对本板与模型的连接，移植到其他板前应核对 0x50 外设用途。
+    该命令的 SPI/SPD 全项只在模型验证；实板默认改用文末 board_test，
+    未确认总线与 0x50 外设用途前不能执行 SPD 路径。
 
   ls2k3000_periph_stress（目标系统 msh 命令）
     4 个线程同时访问同一 SPI0、I2C0 和 RTC，32 轮/线程，共 128 轮。
@@ -410,8 +415,8 @@ libcpu 或 QEMU。寄存器操作按芯片手册实现，硬件引擎与 RT-Thre
 - 通用 virt 的 Smart 八核内存/锁/timer 回归：256 轮/核，共 2048，PASS。
   virt 使用合成交接，不含 2K3000 的真实外设或 EFI。
 
-本次确认的既有 UEFI 启动限制（未解决，不能算作通过）：
-参考 X2K30B0 固件在模型上拒绝当前 v3 加载器的 224 MiB 固定区间申请：
+此前 v3 的 UEFI 启动失败记录（保留原始结果）：
+参考 X2K30B0 固件在模型上拒绝旧 v3 加载器的 224 MiB 固定区间申请：
   ConvertPages: range 2000000 - FFFFFFF covers multiple entries
   Kernel arena unavailable; firmware memory preserved.
   Error: Image ... start failed: Not Found
@@ -420,3 +425,265 @@ libcpu 或 QEMU。寄存器操作按芯片手册实现，硬件引擎与 RT-Thre
 需要进一步核对该固件内存图与项目内存布局；不能简单覆盖固件保留页以绕过检查。
 实板的引脚复用、SPI/I2C 波形、RTC 电池保持、PWM 输出、GPIO 电平、看门狗复位、
 HPET 中断路由仍待后续验证；本次没有连接或修改真实开发板固件。
+
+2026-10-28 探索者实板复测：内存范围与固定 APB
+------------------------------------------------
+板卡：Loongson-2K3000L-G2K30Z1，8 核，UEFI V5.0.0343-stable2511。
+本轮只测试 RT-Thread；未测试、修改或烧写 U-Boot，也未覆盖原 UEFI/Linux。
+Linux 串口 /dev/ttyUSB1，IP 192.168.0.41；通过独立 ESP 测试目录和
+GRUB next_entry 一次性加载，默认 Linux 启动项保持不变。
+
+BUG：v3 把内核区扩到 0x10000000，跨过探索者固件保留区。
+实板 Linux /proc/iomem 的低 RAM 截止 0x0edfffff；dmesg 标记
+0x0ee00000..0x0fffffff 为 nosave 区域，与此前 EFI 分配失败一致。
+修复：内核申请范围改为 0x02000000..0x0e000000（192 MiB），交接区移至
+0x0dff0000，协议版本升级 v4。堆和 DMA 池边界不变，Smart 页池相应缩短。
+保留 AllocateAddress 及内存所有权检查；并未绕开固件分配失败后直接写内存。
+实板：申请成功，memory=35，pci=13，mask=0xff，8 核全部上线。
+内核每核 256 轮、合计 2048 轮内存内容校验/定时/互斥检查通过；13 个 PCI
+设备 ID 与固件记录一致；RT-Thread reboot 返回默认 Linux 已验证。
+该结果不代表全部 8 GiB 内存管理，也不能代替其他固件版本的加载验证。
+
+BUG：旧固件不暴露 0x7a42 APB PCI 功能，导致 RTC/PWM/GPIO/WDT 未注册。
+实板 Linux/DSDT 使用固定 APB 地址 0x10100000；RTC 为 0x10150100，
+PWM 为 0x10120000，GPIO 为 0x10160000，FADT 复位寄存器为 0x10150030。
+修复：仍优先使用有效 PCI BAR；仅在 APB PCI 功能缺失且 EFI 已验证上述
+32 位 FADT reset 地址和值时，使用本板固定 APB 窗口。已存在但无效的 BAR
+不降级为固定地址；所有偏移/长度继续按 0x80000 窗口校验。
+
+保留测试：
+  python3 examples/test/ls2k3000_resource_host.py
+    校验低 RAM/交接区边界、PCI 优先级、固定 APB 资格和错误资源拒绝。
+  ls2k3000_board_test
+    编译 examples/test/ls2k3000_board_test.c 后使用的实板 msh 命令。
+    RTC 递增、HPET 只读计数、SPI0/1 CS0 JEDEC 各重复 257 次；明确输出
+    PASS/FAIL/UNAVAILABLE，设备注册不等于电气功能通过。
+    不默认访问 I2C 0x50，不启动看门狗、不改变 GPIO/PWM、不写 Flash/RTC。
+    Linux i2c-0 的 0x50 是显示 DDC，而非已确认的内存 SPD；总线编号不能
+    直接套用模型。此前 periph_test/periph_stress 的 SPD 路径只在模型验证。
+
+固定 APB 修正后的实板结果：
+- 第二轮 Smart 8 核启动成功，2048 轮内核检查再次 PASS。
+- rtc、hpet0、pin、pwm0、wdt0、i2c0、i2c1 均已注册。
+- RTC 经 1200 ms 等待确认走时，读取 epoch=1793148631，未设置时间。
+- SPI0 CS0 JEDEC=ef6017，连续 257 次 ID 一致，未执行写使能或擦写。
+- HPET 能力检查/注册成功，但计数读取不可用；不能宣称已通过计时测试。
+- SPI1 CS0 未通过 JEDEC 读取，不推断存在可用外接 Flash。
+- board_test 输出 passed=2 unavailable=2 failed=0；这不是所有外设通过。
+- GPIO/PWM/看门狗只确认注册，未做电平、波形或复位测试。
+- I2C 实际从设备收发、USB、网卡、SD/eMMC/NVMe 不计入本轮实板通过项。
+
+本轮结束状态：
+- 3 次 Smart 8 核实板启动、3 次每核 256 轮检查，合计 6144 轮全部通过。
+- 2 次 RT-Thread 原生 reboot 回默认 Linux 成功；SPI ID 读取后也可正常重启。
+- 固定 APB 修正版两轮 board_test 结果一致；SPI0 共 514 次 ID 读取一致。
+- 最后停留在 RT-Thread Smart 八核 msh，重启后的默认启动项仍为 Linux。
+- 标准 RT-Thread + 全部低速外设构建通过；本轮标准单核未上板。
+- 主机 ASan/UBSan 外设引擎 133 项、资源选择测试、EFI 加载器故障注入、
+  内存交接边界检查均通过。不是长时间稳定性认证，也未重跑新版参考 UEFI。
+
+2026-10-28 NovaUIOS 启动的内存与文件映射修正
+------------------------------------------------
+基础内核 v4 可启动不代表完整 UI 能启动。48 MiB 用户 ELF 在旧路径中还会
+被复制到 tmpfs 内核堆，并占用页缓存；加上用户 BSS、栈与映射，v4 的
+64 MiB 页池不足。预检出现 page alloc failed 与页分配断言。
+仅扩大到 80 MiB 页池仍不能完成启动，未将这两份失败镜像上板运行。
+
+最终 v5 仍申请 0x02000000..0x0e000000，未碰触 0x0ee00000 的固件保留区。
+DMA 池移至 0x07e00000..0x08000000，用户页池扩大到接近 96 MiB。
+为避免内核堆再容纳整份 ELF，本 BSP 直接从嵌入的只读 /bin/novaui.elf 启动；
+/mnt 仍挂载 tmpfs，用于界面临时配置。
+
+公共 DFS ROMFS 本身不创建 Smart 文件映射所需的 aspace，所以直接执行会
+报 File mapping is not supported。applications/mnt.c 在本 BSP 注册 uirom：
+复用 ROMFS 目录操作，为普通文件增加只读页来源与 aspace；页尾补零，拒绝
+回写。applications/novaui.c 提供板级启动命令，公共 RT-Thread 和其他板卡的
+NovaUIOS launcher 均不修改。drivers/SConscript 单独组合显示服务与板级 launcher。
+
+预检：8 核、1920x1080、NOVAUI READY、page=0、active=1、errors=0 通过。
+用户 ELF 沿用此前通过 1080p 预检的版本，SHA-256：
+39ce49cf834268f5762a48b90682c11412c21be1a85a253385ce836b390e7687。
+
+v5 NovaUIOS 实板启动通过（串口状态，屏幕观感待用户确认）：
+- UEFI v5 handoff：192 MiB、35 个内存描述符、13 个 PCI 设备，8 核上线。
+- NOVAUI READY 1920x1080 mode=user os=rtos，page=0，active=1，pid=1。
+- 首页采样 frames=17、errors=0；剩余页 11613，内核堆使用 9584448 字节。
+- 镜像已通过传输及 ESP 文件 SHA-256 校验，一次性 GRUB 项 novaui-20261028-v5。
+- EFI SHA-256：31a87847a1929b1890b5445b373a9b81b021e76f972e0f00db1c0959c3db89e7。
+- 停留首页，不自动重启。默认 Linux、原 UEFI 与 U-Boot 均未替换。
+- 此结果只证明 UI 启动和显示提交成功，不代表 USB 鼠标、网络、相机已可用。
+
+2026-10-28 页面、网络及存储实板复测
+------------------------------------
+范围：2K3000 探索者，UEFI 保留，GRUB 单次启动 RT-Thread Smart 八核；
+没有测试或刷写 U-Boot。原生 HDMI 沿用固件 GOP，NovaUIOS 为 1920x1080。
+
+界面：novaui_test 实板 PASS，1720 views、122975 widgets、39948 buttons、
+42990 bindings、558 actions、2868 routes，200 次首页重建内存检查 PASS。
+另用 novaui_page 1720..1745 遍历 26 个原生页面，每页查询 active=1/errors=0；
+测量页显示全部 8 核。测试为 LVGL 事件和状态巡检，不代表 USB 鼠标链路、
+全部外设功能或每个像素的人工观感确认。审计中的 unavailable=36251 不能
+算成外设功能通过。全目录巡检后页池余量约 485 页，不能据此宣称内存充足。
+
+BUG：GMAC 只有头两个 TX 完成，后续 pending 增长，PHY 千兆但 DHCP/ping 失败。
+根因与修复：旧 DMA 池通过 CPU 非缓存别名访问，与 2K3000 一致性 DMA 访问
+共享缓存的方式混用。改为单一缓存一致性别名，保留独立 DMA 区域与屏障，
+不修改物理地址、不截断地址、不改变固件一致性寄存器。主核启动时仍清理
+继承的缓存别名。实测 CPUCFG16=0x5d、末级缓存叶为 2、行宽 64 字节；
+0x1fe00470=0。未知策略停用 DMA 池并保留控制台，不盲目打开 DMA。
+修正后 DHCP 自动取得 192.168.0.42；板到电脑 5 次 ping 全通过，电脑到板
+10 次 1472 字节 ICMP payload 全通过。NovaUIOS 同时运行时，10000 个 UDP
+单包往返共 7314829 字节逐包一致，16 MiB TCP 流逐字节一致，txerr/rxerr/
+drop/buserr/fault 均未增加，pending 回到 0，UI errors=0。
+边界：16 包窗口的 UDP 突发测试失败。公共 lwipopts.h 将 UDP 接收邮箱固定
+为 1 槽；单包往返 PASS 不能掩盖突发丢包，本轮没有修改公共 lwIP 配置。
+测试入口 examples/test/ls2k3000_network_board.py --port <稳定物理串口路径>
+--peer <DHCP 地址> --output <日志目录>；--window 16 可复测突发边界。
+镜像包含保留的 examples/test/ls2k_gmac_echo.c 与 ls2k_tcp_echo.c 诊断命令。
+
+BUG：SD CMD8/R7 被未初始化的 busy_timeout 拒绝，后续 ACMD41 缺少 HCS。
+修复仅在 BSP：仅 R1b 响应命令读取 busy_timeout，不改 MMC 公共核心。
+修正后能读出 SDHC 容量 15564800 KiB；数据路径的验证结果另记如下。
+保留 ls2k3000_block_test.c：只读、两遍顺序 CRC32、128 个全盘抽样位置，
+包括末尾扇区；不挂载、不格式化、不写块设备。测试前 Linux 的首 1 MiB
+CRC32：eMMC c052d655，SD b3f61b3f。两设备分别为 29.3 GiB 和 14.8 GiB。
+build_kernel.py 新增 --emmc-base/--sd-base，必须显式带 --mmc 和输入时钟。
+本板从 ACPI _CRS/_DSD 核对：eMMC 0x79990000、SD 0x79991000、100 MHz。
+
+USB/SSD 边界：Linux 识别 0c45:636b USB 2.0 Camera，xHCI 480 Mbit/s；
+ffmpeg 对 /dev/video0 采集 150 帧 640x480 YUYV，有效约 14 FPS。
+这仅证明摄像头硬件和 Linux 路径可用。RT-Thread BSP 尚未接入原生 xHCI
+HCD，不能宣称 RT-Thread 摄像头枚举、采集或 UI 预览通过。
+用户确认 SSD 尚未接入，因此 NVMe/SATA SSD 实读不计入通过项，改测 SD/eMMC。
+串口需使用物理 by-path 路径；多个无序列号 CH340 共用 by-id 名称，新插入
+其他板卡可能改变该符号链接。本板为 USB 拓扑 0d:00.0/3.4（ttyUSB1）。
+
+存储早期 io6 结果：未通过，不算读取成功（后续 mmc22 结果见下一节）。
+- eMMC 已发送 12 个命令，CMD8/EXT_CSD 返回 -110；响应 0x900、命令状态 8、
+  中断状态 0x40（只有命令完成），没有数据完成。DMA 查询快照为 0x509。
+- SD 在缓存一致性池下停于 DMA quiesce，主机注册返回 -5；没有可读块设备。
+- 按手册移除 integrated DMA order 的保留 bit 1，不改变上述失败结果。
+- CON=3 与提前启用 400 kHz 的 Linux 对照未改善，试探改动已撤回。
+- list_blk 为空，ls2k3000_block_test sd0 16 返回 UNAVAILABLE；没有读出扇区，
+  因此不能宣称首 MiB CRC32、连续读取或随机抽样已通过。未执行介质写入。
+- 后续应分离验证 DMA order/query 写回和 FIFO 数据阶段；寄存器响应不等于
+  DMA 完成，必须先建立可靠块读取再执行保存的完整测试。
+最终恢复测试项 novaui-20261028-io6（未保留 CON=3 试探配置）；EFI SHA256：
+0e956e55bbec7b5908e0f9c75d7fb414a0e1f4877bff8e4365e83e673597a094。
+内核 SHA256：64735c204651c1df588ecc30d495663483132dfada2f1a20aea6dbcbc5ff214d。
+网络完整校验在相同网络实现的 io5 通过；io6 只移除了 MMC DMA 保留位。
+
+
+2026-10-28 SD/eMMC 数据 DMA 与多块读取修复（mmc22）
+----------------------------------------------------
+范围：同一探索者实板，RT-Thread Smart 八核，小诊断镜像，不运行 NovaUIOS。
+所有驱动修正局限于本 BSP，公共 MMC/SD 核心未修改。仅执行块设备读取，
+没有格式化、挂载、擦除、分区修改或数据写入。EFI/GRUB 临时测试项另经
+SHA-256 校验写入 ESP；它不属于只读块测试，未替换默认 Linux 或刷固件。
+
+已分离证实的问题及保留修复：
+1. 第一个真实 DMA 描述符之前执行 QUERY，会使本板后续 START 不取描述符。
+   单变量省去初始化 QUERY 后 EXT_CSD、SCR 和扇区 DMA 开始完成。初始化仍
+   保留 STOP/reset，运行中完成/错误路径的 QUERY 与存储隔离检查没有删除。
+2. QUERY 可读到自身写回状态 5；DONE 位可能在读状态非零时仍为 1。
+   只接受读状态 0 且写状态 0 或 5；UINT_MAX 哨兵、仍忙或超时均失败。
+   无法确认停止的 DMA 存储继续隔离，不以旧 DONE 位允许复用。
+3. eMMC CMD6 正常命令集参数低字节是 1，旧白名单错误地只允许 0。
+   现只允许 SDR 总线宽度/时序及关闭缓存，仍禁止分区/OTP 编程、开启缓存。
+4. mmcsd_detect 原 4 KiB 栈在首次 GPT/DFS 设备注册时越界，破坏相邻 SPI
+   设备对象，最终在设备名查找空指针崩溃。16 KiB 单变量对照不再损坏对象，
+   实测最大使用 40%（约 6.5 KiB）。官方构建和本 BSP Kconfig 默认增至16 KiB。
+5. 两个 mmcsd_alloc_host 默认同名 sd，导致分区名冲突。分别命名 mmc0/mmc1。
+6. CMD18 多块数据完成，但后续 CMD12 读停止可能没有 DAT0 忙沿/BUSY_DONE。
+   CMD12 先完成响应，再以有限时 CMD13 检查 READY_FOR_DATA 且状态 TRAN；
+   保留原 CMD12 响应，不能把仅有 READY 或仍处于 DATA/PRG 当作结束。
+
+无效对照没有迁入生产：额外 CON 位、调整 DMA 位宽/next 指针、提前 DATA、
+显式整区 cache 操作、保留大于4 GiB DMA池均没有单独解决启动问题。
+mmc22 使用正式低地址一致性 DMA池、正常加载器，不依赖这些试探改动。
+初次高地址对照没有保证描述符可见，后续在显式同步基线上另做高地址对照；
+两次都不能代替对首个 QUERY 的单变量验证。
+
+mmc22 实板结果：
+- eMMC mmc0：61472768 个512字节扇区，25 MHz、8-bit SDR，五个分区注册。
+- SD mmc1：31129600 个512字节扇区，25 MHz、4-bit SDR，两个分区注册。
+- 各执行 ls2k3000_block_test <设备> 16：两遍16 MiB顺序读取，128个全盘
+  位置各双读16 KiB（包括尾部），每设备36 MiB，合计72 MiB，均 PASS。
+- eMMC 两遍首1 MiB CRC32=c052d655，与Linux吻合；两遍16 MiB均9cbc427e。
+  Linux关机前16 MiB为b3a11da1，与RT不同。该区域包含本次加载使用的ESP，
+  Linux卸载及固件加载期间是否修改尚未分区比对，不能宣称跨系统16 MiB
+  完全一致，也不能仅凭推测把差异认定为正常。RT内部重复/随机一致已通过。
+- SD 两遍首1 MiB=b3f61b3f、16 MiB=9103203a，均与Linux参考精确吻合。
+- 测后MMC0 req=4690 err=0 fault=0，MMC1 req=4630 err=0 fault=0。
+- mmcsd_detect 栈16 KiB最大40%；未再出现对象链表损坏或异常退出。
+- 此结果不包括写入、热插拔、更高频率、长时间并发UI/网络压力认证。
+
+保留回归：examples/test/ls2k3000_mmc_poll_test.py 直接编译生产引擎，ASan/
+UBSan验证忙状态+旧DONE、QUERY写回、未写哨兵、超时、CMD13 DATA/PRG状态、
+R1错误与TRAN就绪；examples/test/ls2k3000_block_test.c 为上述实板只读命令。
+正式 build_kernel.py 全新 Smart SMP+外设+网络+MMC 构建通过。
+mmc22 EFI SHA-256：
+d0b48e32008feea5dc0acd350de4b712f0acebfc36056ffc9b65eb9d1ab794bc。
+本机会话证据目录 /tmp/ls2k3000-rtt-board-20261028/：
+mmc22-console.log、mmc22-emmc-read.log、mmc22-sd-read.log、mmc22-status.log、
+mmc-stop-ready-regression.log、mmc-release-final-r2.log。
+默认启动仍为Linux；当前停留mmc22 Smart八核控制台，未提交代码。
+
+
+2026-10-28 eMMC 跨 Linux 的逐扇区复核（mmc23）
+----------------------------------------------
+为定位上一节16 MiB差异，在保留的块测试中新增 ls2k3000_block_crc：
+按16 KiB发起读取，逐个512字节扇区输出CRC32，输出行限制在控制台缓冲内。
+mmc23的三个SD驱动源文件与mmc22生产版本SHA一致，只新增测试命令。
+EFI SHA-256：56ff0aa480581cd73f99e66c60d351824195825ea84dbc6a76fd9f40e71721e5。
+首次串口上传检测到base64分块不完整，未通过SHA校验、未部署或启动该数据；
+缩小分块后完整SHA校验通过，再通过现有GRUB一次性启动路径运行。
+
+参考的稳定性检查：
+- eMMC ESP从LBA4096（2 MiB）开始，FAT32 BPB的FSInfo相对扇区为1。
+- Linux完成本次EFI部署并sync后，记录前16 MiB所有32768个扇区CRC；
+  成功umount /boot/efi并核对/proc/mounts后，再记录主参考。
+- Linux卸载前后16 MiB逐字节完全相同，CRC均212c12a9。因此不能把本次
+  差异解释成Linux卸载时修改脏位，实际记录UNMOUNT_SECTOR_CHANGES=[]。
+- 第一次RT读取总CRC=f21783bd，只有LBA4097（FSInfo）与Linux主参考不同：
+  Linux扇区CRC=b27f71b0，RT=3b3d42e9；其余32767扇区全部一致，无缺失。
+- 再以单扇区命令读取4097仍为3b3d42e9，并非只在16 KiB多块读出现。
+
+不再部署EFI文件的独立复核：
+- 重启回Linux后，仅读取/核对已安装镜像，没有复制或改写EFI文件。
+  Linux此时16 MiB总CRC=f21783bd，全部32768扇区与上次RT输出一致。
+- Linux直接读取FSInfo原始512字节，CRC=3b3d42e9；当前free_clusters=8906、
+  next_free=67739。再次umount ESP前后所有字节不变。
+- 复用原有mmc23一次性GRUB项启动RT：新一轮32768个扇区与这一份未挂载
+  Linux主参考全部匹配，总CRC双方f21783bd，missing=[]、changed=[]，PASS。
+- 这确认了RT读到的FSInfo值也存在于后续Linux读到的介质内容中，而非RT
+  独有读取错误。首次差异发生在Linux主参考之后到RT首次读取之前的启动
+  区间；尚未定位哪个启动组件更新FSInfo，不把推测写成UEFI已证实缺陷。
+- 旧mmc22只有整体CRC，没有逐扇区或原始FSInfo，不能直接倒推出旧差异
+  必然是同一扇区/字段。保留其原始限制，不以新一轮结果改写历史证据。
+
+RT写入路径核对：
+- 实际mmc23配置BSP_LS2K3000_MMC_ALLOW_WRITE未启用；BSP入口在提交前拒绝
+  所有DATA_DIR_WRITE及写块/擦除/永久CSD/锁定命令。
+- eMMC CMD6只允许SDR宽度、普通高速时序及CACHE_CTRL=0，分区字段等不放行。
+- RT_USING_DFS_MNTTABLE未启用，分区注册的自动挂载遍历未编译；本镜像无UI，
+  BSP UI挂载代码也未运行。分区探测是块读取，未挂载卡上的FAT文件系统。
+  实板mount输出只有/dev与/dev/mqueue；最终MMC0 req=2130 err=0 fault=0，
+  MMC1 req=22 err=0 fault=0。
+- 新一轮额外RT读取两遍16 MiB加一次512字节FSInfo；没有介质数据写入测试。
+  Linux默认启动项、固件仍未更换；当前停留mmc23 Smart八核控制台。
+
+复现入口（先由操作者确保参考范围稳定，脚本自身不挂载/卸载/写设备）：
+  python3 examples/test/ls2k3000_block_reference.py /dev/mmcblk0 0 32768 \
+      --phase unmounted --dump-sector 4096 --dump-sector 4097
+  RT msh: ls2k3000_block_crc mmc0 0 32768
+  python3 examples/test/ls2k3000_block_crc_compare.py linux.log rtos.log \
+      --phase unmounted --output comparison.json
+比较脚本拒绝缺少PASS尾行、缺失/重复/越界扇区；保留不匹配扇区列表。
+比较的是CRC，不将校验和等同于密码学逐字节证明。
+主机会话证据目录 /tmp/ls2k3000-rtt-board-20261028/：
+mmc23-console-retry.log、mmc23-emmc-sector-crc.log、mmc23-fsinfo-single.log、
+mmc23-second-reference-console.log、mmc23-emmc-sector-crc-second.log、
+mmc23-sector-comparison.json（首轮FAIL，明确单个FSInfo差异）、
+mmc23-linux-after-rt-comparison.json、mmc23-stable-sector-comparison.json（均PASS）、
+mmc23-production-driver-match.json、mmc23-final-status.log。

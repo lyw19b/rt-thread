@@ -88,12 +88,18 @@ void rt_hw_board_init(void)
     rt_system_heap_init(RT_HW_HEAP_BEGIN, RT_HW_HEAP_END);
 
 #ifdef BSP_USING_DMA_POOL
-    RT_ASSERT(ls2k3000_dma_init() == RT_EOK);
+    int dma_result = ls2k3000_dma_init();
 #endif
 
     rt_hw_interrupt_init();
     ls2k3000_uart_init();
     rt_console_set_device(RT_CONSOLE_DEVICE_NAME);
+#ifdef BSP_USING_DMA_POOL
+    if (dma_result != RT_EOK)
+    {
+        rt_kprintf("DMA pool unavailable: unsupported cache/coherency policy (%d)\n", dma_result);
+    }
+#endif
     rt_hw_timer_init();
     rt_components_board_init();
 }

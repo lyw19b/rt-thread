@@ -25,6 +25,7 @@
 #define LSD_PRE         0x04
 #define LSD_ARG         0x08
 #define LSD_CMD         0x0c
+#define LSD_CMD_STATUS  0x10
 #define LSD_RESPONSE    0x14
 #define LSD_TIMER       0x24
 #define LSD_BLOCK_SIZE  0x28
@@ -62,7 +63,6 @@
 #define LSD_REQUEST_IRQS  (LSD_ALL_STATUS & ~(1U << 5))
 
 #define LSD_DMA_64BIT    1U
-#define LSD_DMA_UNCACHED 2U
 #define LSD_DMA_QUERY    4U
 #define LSD_DMA_START    8U
 #define LSD_DMA_STOP     16U
@@ -133,12 +133,22 @@ struct ls2k3000_mmc
     uint32_t base_address;
     uint32_t input_clock;
     uint32_t clock;
+    uint32_t last_status;
+    uint32_t last_command_status;
+    uint32_t last_response;
+    uint32_t last_dma_state;
+    uint32_t last_data_control;
+    uint32_t last_data_status;
+    uint32_t last_fifo_status;
+    uint32_t last_dma_order;
     unsigned int width;
     int emmc;
     int fault;
 };
 
 int ls2k3000_mmc_quiesce(struct ls2k3000_mmc *sd);
+int ls2k3000_mmc_wait_ready(struct ls2k3000_mmc *sd, uint16_t rca,
+                          unsigned int timeout_ms);
 int ls2k3000_mmc_reset(struct ls2k3000_mmc *sd);
 int ls2k3000_mmc_clock(struct ls2k3000_mmc *sd, uint32_t requested);
 int ls2k3000_mmc_transfer(struct ls2k3000_mmc *sd, struct ls2k3000_mmc_command *cmd);

@@ -5,7 +5,7 @@
  *
  * Change Logs:
  * Date           Author                    Notes
- * 2026-10-28     LoongsonLab               align file header with LS2K0300
+ * 2026-10-28     LoongsonLab               keep arena below Explorer firmware reservation
  */
 
 /*
@@ -20,14 +20,17 @@
 #include <stddef.h>
 
 #define LS2K3000_BOOT_MAGIC       UINT64_C(0x4c53334b55454649)
-#define LS2K3000_BOOT_VERSION     3U
+#define LS2K3000_BOOT_VERSION     5U
+
+/* Keep the arena below the Explorer firmware reservation at 0x0ee00000. */
 #define LS2K3000_KERNEL_PHYS      UINT64_C(0x02000000)
-#define LS2K3000_RESERVED_BYTES   UINT64_C(0x0e000000)
+#define LS2K3000_RESERVED_BYTES   UINT64_C(0x0c000000)
 #define LS2K3000_IMAGE_MAX        UINT64_C(0x04000000)
-#define LS2K3000_DMA_PHYS         UINT64_C(0x09e00000)
+#define LS2K3000_DMA_PHYS         UINT64_C(0x07e00000)
 #define LS2K3000_DMA_BYTES        UINT64_C(0x00200000)
-#define LS2K3000_HANDOFF_PHYS     UINT64_C(0x0fff0000)
+#define LS2K3000_HANDOFF_PHYS     UINT64_C(0x0dff0000)
 #define LS2K3000_HANDOFF_BYTES    UINT64_C(0x00010000)
+
 #define LS2K3000_MEMORY_MAX       256U
 #define LS2K3000_PCI_MAX          64U
 

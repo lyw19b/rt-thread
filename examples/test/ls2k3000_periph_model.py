@@ -47,7 +47,7 @@ _start:
     st.w $t1, $t0, 0
     dbar 0
     li.d $a0, 0x4c53334b55454649
-    li.d $a1, 0x0fff0000
+    li.d $a1, 0x0dff0000
     move $a2, $zero
     li.d $t0, 0x02000000
     jr $t0
@@ -133,7 +133,7 @@ def main():
                '-smp', str(args.cpus), '-bios', str(scratch),
                '-device', 'loader,file=' + str(output / 'entry.elf') + ',cpu-num=0',
                '-device', 'loader,file=' + str(args.kernel.resolve()) + ',addr=0x02000000',
-               '-device', 'loader,file=' + str(output / 'handoff.bin') + ',addr=0x0fff0000',
+               '-device', 'loader,file=' + str(output / 'handoff.bin') + ',addr=0x0dff0000',
                '-display', 'none', '-serial', 'stdio', '-monitor', 'none', '-nic', 'none']
     for cpu in range(1, args.cpus):
         command += ['-device', 'loader,addr=0x1000000,cpu-num=' + str(cpu)]

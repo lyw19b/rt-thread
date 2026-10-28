@@ -14,6 +14,11 @@ BSP_DIR := .
 RTT_DIR := ../../..
 PKGS_DIR := packages
 
+# Put this board default before the generic SDIO definition: Kconfig uses the
+# first matching default. Smart DFS partition registration needs about 6.5 KiB.
+config RT_MMCSD_STACK_SIZE
+    default 16384 if BSP_USING_LS2K3000_MMC && RT_USING_SMART
+
 source "$(RTT_DIR)/Kconfig"
 osource "$PKGS_DIR/Kconfig"
 
@@ -72,7 +77,7 @@ config BSP_USING_NVME
     select RT_USING_DEVICE_OPS
     default n
     help
-        Uses firmware PCI resources and dedicated uncached DMA storage.
+        Uses firmware PCI resources and dedicated coherent DMA storage.
         Supports 512-byte and 4 KiB sectors with bounded synchronous commands.
         Does not format or automatically mount any disk. MSI is not required.
 

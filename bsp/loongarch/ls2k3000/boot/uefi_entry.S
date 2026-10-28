@@ -5,7 +5,7 @@
  *
  * Change Logs:
  * Date           Author                    Notes
- * 2026-10-28     LoongsonLab               align file header with LS2K0300
+ * 2026-10-28     LoongsonLab               keep handoff below firmware reserved memory
  */
 
 /*
@@ -26,7 +26,7 @@ ls2k3000_efi_enter:
     dbar    0
     ibar    0
     li.d    $a0, 0x4c53334b55454649
-    li.d    $a1, 0x0fff0000
+    li.d    $a1, 0x0dff0000
     move    $a2, $zero
     li.d    $t0, 0x9000000002000000
     jr      $t0

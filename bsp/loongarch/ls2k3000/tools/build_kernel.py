@@ -32,6 +32,10 @@ def main():
     parser.add_argument('--nvme', action='store_true', help='Enable read-only NVMe bring-up')
     parser.add_argument('--mmc', action='store_true', help='Compile native SD/eMMC support')
     parser.add_argument('--mmc-clock', type=int, default=0, help='Verified MMC input clock in Hz')
+    parser.add_argument('--emmc-base', type=lambda value: int(value, 0), default=0,
+                        help='Verified ACPI eMMC MMIO base when PCI hides the host')
+    parser.add_argument('--sd-base', type=lambda value: int(value, 0), default=0,
+                        help='Verified ACPI SD MMIO base when PCI hides the host')
     parser.add_argument('--network', action='store_true', help='Compile GMAC2/lwIP support')
     parser.add_argument('--peripherals', action='store_true',
                         help='Compile SPI, I2C, RTC, GPIO, PWM, HPET and watchdog')
@@ -41,6 +45,16 @@ def main():
 
     if args.novaui and args.profile == 'rtt':
         parser.error('--novaui requires Smart')
+
+    if (args.emmc_base or args.sd_base) and (not args.mmc or not args.mmc_clock):
+        parser.error('Explicit MMC resources require --mmc and a verified --mmc-clock')
+
+    for address in (args.emmc_base, args.sd_base):
+        if address < 0 or address > 0xffffefff or address & 0xfff:
+            parser.error('MMC resource addresses must be page-aligned 32-bit MMIO')
+
+    if args.emmc_base and args.emmc_base == args.sd_base:
+        parser.error('eMMC and SD must use distinct resources')
 
     output = args.output.resolve()
     snapshot = output / 'rt-thread'
@@ -73,10 +87,17 @@ def main():
             parser.error('--mmc-clock is outside the 10-bit identification divider range')
 
         with (board / '.config').open('a') as config:
+            # Smart DFS partition/device registration uses about 6.5 KiB on
+            # Explorer. Keep headroom for nested filesystem calls and IRQs.
             config.write('\nCONFIG_BSP_USING_LS2K3000_MMC=y\n'
-                         'CONFIG_RT_MMCSD_STACK_SIZE=4096\n'
+                         'CONFIG_RT_MMCSD_STACK_SIZE=16384\n'
                          'CONFIG_RT_SDIO_STACK_SIZE=4096\n'
                          'CONFIG_BSP_LS2K3000_MMC_INPUT_HZ=' + str(args.mmc_clock) + '\n')
+
+            if args.emmc_base or args.sd_base:
+                config.write('CONFIG_BSP_LS2K3000_MMC_ACPI_STATIC=y\n'
+                             f'CONFIG_BSP_LS2K3000_EMMC_BASE={args.emmc_base:#x}\n'
+                             f'CONFIG_BSP_LS2K3000_SD_BASE={args.sd_base:#x}\n')
 
     if args.network:
         with (board / '.config').open('a') as config:
@@ -149,6 +170,7 @@ def main():
 
     manifest = {'status': 'BUILD_PASS_NOT_BOARD_TESTED', 'profile': args.profile,
                 'nvme': args.nvme, 'mmc': args.mmc, 'mmc_clock': args.mmc_clock,
+                'emmc_base': hex(args.emmc_base), 'sd_base': hex(args.sd_base),
                 'network': args.network, 'peripherals': args.peripherals,
                 'novaui_sha256': (hashlib.sha256(args.novaui.read_bytes()).hexdigest()
                                   if args.novaui else None),

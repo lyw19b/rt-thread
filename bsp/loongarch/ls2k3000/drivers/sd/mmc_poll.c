@@ -102,7 +102,9 @@ static void dma_order(struct ls2k3000_mmc *sd, unsigned int reg, uint32_t addres
     sd->io->barrier(sd->context);
     /* The integrated DMA latches the order on the low-word write, unlike the old IP. */
     write_reg(sd, reg + 4, 0);
-    write_reg(sd, reg, address | LSD_DMA_64BIT | LSD_DMA_UNCACHED | operation);
+    /* Bit 1 is reserved on this integrated DMA. Do not carry over the
+     * LS2K0300 uncached-request attribute into the coherent Explorer pool. */
+    write_reg(sd, reg, address | LSD_DMA_64BIT | operation);
 }
 
 static int dma_state(struct ls2k3000_mmc *sd, unsigned int reg, uint32_t *state)
@@ -116,6 +118,14 @@ static int dma_state(struct ls2k3000_mmc *sd, unsigned int reg, uint32_t *state)
 
     sd->io->barrier(sd->context);
     *state = sd->dma->query.command;
+    sd->last_dma_state = *state;
+
+    /* An untouched sentinel also has DONE set. Never accept it as a reply. */
+    if (*state == UINT32_MAX)
+    {
+        return LSD_IO;
+    }
+
     return LSD_OK;
 }
 
@@ -137,7 +147,13 @@ static int dma_finish(struct ls2k3000_mmc *sd, unsigned int reg, int stop)
             return LSD_TIMEOUT;
         }
 
-        if ((state & LSD_DMA_DONE) || (stop && !(state & LSD_DMA_STATES)))
+        /* QUERY captures its own Write_dma state (5), before that writeback
+         * completes. With STOP requested, an idle read engine and either an
+         * idle writer or the completed query writer establish quiescence.
+         * Payload writes (states 1..3) must still be waited out. A stale DONE
+         * from the previous transfer does not override a busy read/writer. */
+        if ((stop || (state & LSD_DMA_DONE)) && !(state & 0xf0U) &&
+            (!(state & 0xf00U) || (state & 0xf00U) == 0x500U))
         {
             return LSD_OK;
         }
@@ -182,6 +198,57 @@ static uint8_t reverse_byte(uint8_t byte)
     byte = ((byte & 0x55U) << 1) | ((byte >> 1) & 0x55U);
     byte = ((byte & 0x33U) << 2) | ((byte >> 2) & 0x33U);
     return (byte << 4) | (byte >> 4);
+}
+
+int ls2k3000_mmc_wait_ready(struct ls2k3000_mmc *sd, uint16_t rca,
+                          unsigned int timeout_ms)
+{
+    uint32_t start = sd->io->time_ms(sd->context);
+
+    if (!rca || !timeout_ms || timeout_ms > 10000)
+    {
+        return LSD_INVALID;
+    }
+
+    for (;;)
+    {
+        uint32_t elapsed = sd->io->time_ms(sd->context) - start;
+        struct ls2k3000_mmc_command status = {0};
+        int result;
+
+        if (elapsed >= timeout_ms)
+        {
+            return LSD_TIMEOUT;
+        }
+
+        status.index = 13;
+        status.argument = (uint32_t)rca << 16;
+        status.response_present = 1;
+        status.response_crc = 1;
+        status.timeout_ms = timeout_ms - elapsed;
+        result = ls2k3000_mmc_transfer(sd, &status);
+
+        if (result)
+        {
+            return result;
+        }
+
+        /* R1 errors are above the CURRENT_STATE/READY_FOR_DATA fields. */
+        if (status.response[0] & 0xffffe000U)
+        {
+            return LSD_IO;
+        }
+
+        /* A read STOP can finish without a DAT0 busy edge. Require both
+         * READY_FOR_DATA and TRAN, rather than accepting response completion. */
+        if ((status.response[0] & (1U << 8)) &&
+            ((status.response[0] >> 9) & 15U) == 4)
+        {
+            return LSD_OK;
+        }
+
+        sd->io->wait_ms(sd->context, 1);
+    }
 }
 
 int ls2k3000_mmc_transfer(struct ls2k3000_mmc *sd, struct ls2k3000_mmc_command *cmd)
@@ -354,6 +421,21 @@ int ls2k3000_mmc_transfer(struct ls2k3000_mmc *sd, struct ls2k3000_mmc_command *
     }
 
 out:
+    sd->last_status = seen;
+    sd->last_command_status = read_reg(sd, LSD_CMD_STATUS);
+    sd->last_response = read_reg(sd, LSD_RESPONSE);
+    sd->last_data_control = read_reg(sd, LSD_DATA);
+    sd->last_data_status = read_reg(sd, 0x34);
+    sd->last_fifo_status = read_reg(sd, LSD_FIFO_STATUS);
+    sd->last_dma_order = read_reg(sd, dma_reg);
+
+    if (dma_started && result)
+    {
+        uint32_t state;
+
+        /* Capture the failed transaction before STOP/reset changes the engine. */
+        dma_state(sd, dma_reg, &state);
+    }
     write_reg(sd, LSD_IRQ_ENABLE, 0);
     if (result)
     {

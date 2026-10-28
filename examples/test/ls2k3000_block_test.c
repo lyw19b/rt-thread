@@ -1,0 +1,252 @@
+/*
+ * Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Change Logs:
+ * Date           Author                    Notes
+ * 2026-10-28     LoongsonLab               retain read-only storage validation
+ */
+
+/*
+ * Description:
+ *   Read a named block device twice sequentially and sample the whole device.
+ * Notes:
+ *   No writes, formatting, mounting or sync commands are issued. The device
+ *   must remain unchanged during the test. CRC32 uses the IEEE polynomial.
+ */
+
+#include <rtthread.h>
+#include <rtdevice.h>
+#include <stdlib.h>
+
+#define READ_BYTES 16384U
+
+static rt_uint32_t block_crc(rt_uint32_t crc, const rt_uint8_t *bytes, rt_size_t size)
+{
+    for (rt_size_t i = 0; i < size; ++i)
+    {
+        crc ^= bytes[i];
+
+        for (unsigned int bit = 0; bit < 8; ++bit)
+        {
+            crc = (crc >> 1) ^ (0xedb88320U & (0U - (crc & 1U)));
+        }
+    }
+
+    return crc;
+}
+
+static int ls2k3000_block_test(int argc, char **argv)
+{
+    struct rt_device_blk_geometry geometry;
+    rt_device_t device;
+    rt_uint8_t *first;
+    rt_uint8_t *second;
+    rt_uint64_t limit;
+    rt_uint64_t read_bytes = 0;
+    rt_uint32_t expected = 0;
+    rt_uint32_t seed = 0x2a3000;
+    rt_tick_t start = rt_tick_get();
+    unsigned int mib = argc > 2 ? atoi(argv[2]) : 16;
+    rt_size_t count;
+    int result = -RT_ERROR;
+
+    if (argc < 2 || argc > 3 || !mib || mib > 256)
+    {
+        rt_kprintf("Usage: ls2k3000_block_test device [MiB:1..256]\n");
+        return -RT_EINVAL;
+    }
+
+    device = rt_device_find(argv[1]);
+
+    if (!device || device->type != RT_Device_Class_Block ||
+        rt_device_open(device, RT_DEVICE_OFLAG_RDONLY))
+    {
+        rt_kprintf("BLOCK UNAVAILABLE device=%s\n", argv[1]);
+        return -RT_ENOSYS;
+    }
+
+    first = rt_malloc(READ_BYTES);
+    second = rt_malloc(READ_BYTES);
+
+    if (!first || !second ||
+        rt_device_control(device, RT_DEVICE_CTRL_BLK_GETGEOME, &geometry) ||
+        (geometry.bytes_per_sector != 512 && geometry.bytes_per_sector != 4096))
+    {
+        goto out;
+    }
+
+    count = READ_BYTES / geometry.bytes_per_sector;
+    limit = (rt_uint64_t)mib * 1024U * 1024U / geometry.bytes_per_sector;
+
+    if (geometry.sector_count < limit || geometry.sector_count > INT64_MAX)
+    {
+        goto out;
+    }
+
+    rt_kprintf("BLOCK device=%s sectors=%llu sector_bytes=%u MiB=%u\n",
+               argv[1], geometry.sector_count, geometry.bytes_per_sector, mib);
+
+    for (unsigned int pass = 0; pass < 2; ++pass)
+    {
+        rt_uint32_t crc = UINT32_MAX;
+
+        for (rt_uint64_t sector = 0; sector < limit; sector += count)
+        {
+            if (rt_device_read(device, sector, first, count) != count)
+            {
+                rt_kprintf("BLOCK read failed sector=%llu pass=%u\n", sector, pass);
+                goto out;
+            }
+
+            crc = block_crc(crc, first, READ_BYTES);
+            read_bytes += READ_BYTES;
+
+            if ((sector + count) * geometry.bytes_per_sector == 1024U * 1024U)
+            {
+                rt_kprintf("BLOCK first_MiB_crc32=%08x pass=%u\n", ~crc, pass);
+            }
+        }
+
+        if (pass && expected != ~crc)
+        {
+            rt_kprintf("BLOCK sequential mismatch expected=%08x actual=%08x\n",
+                       expected, ~crc);
+            goto out;
+        }
+
+        expected = ~crc;
+        rt_kprintf("BLOCK sequential pass=%u crc32=%08x\n", pass, expected);
+    }
+
+    for (unsigned int sample = 0; sample < 128; ++sample)
+    {
+        rt_uint64_t sector;
+
+        seed = seed * 1664525U + 1013904223U;
+        sector = (rt_uint64_t)seed % (geometry.sector_count - count + 1);
+
+        if (sample == 0)
+        {
+            sector = geometry.sector_count - count;
+        }
+
+        if (rt_device_read(device, sector, first, count) != count ||
+            rt_device_read(device, sector, second, count) != count ||
+            rt_memcmp(first, second, READ_BYTES))
+        {
+            rt_kprintf("BLOCK random mismatch sample=%u sector=%llu\n", sample, sector);
+            goto out;
+        }
+
+        read_bytes += 2 * READ_BYTES;
+    }
+
+    result = RT_EOK;
+
+out:
+    rt_free(second);
+    rt_free(first);
+    rt_device_close(device);
+    rt_kprintf("BLOCK %s device=%s bytes=%llu ticks=%u\n",
+               result ? "FAIL" : "PASS", argv[1], read_bytes, rt_tick_get() - start);
+    return result;
+}
+
+MSH_CMD_EXPORT(ls2k3000_block_test, Read-only sequential and random block verification);
+
+/* Compare operating systems without assuming that a mounted filesystem stayed
+ * unchanged. Each line contains at most sixteen independent sector CRCs, so
+ * it fits the standard 256-byte RT console buffer without truncation. */
+static int ls2k3000_block_crc(int argc, char **argv)
+{
+    struct rt_device_blk_geometry geometry;
+    rt_device_t device;
+    rt_uint8_t *buffer;
+    rt_uint64_t start;
+    rt_uint64_t sectors;
+    rt_uint32_t total = UINT32_MAX;
+    char *end;
+    int result = -RT_ERROR;
+
+    if (argc != 4 || argv[2][0] == '-' || argv[3][0] == '-')
+    {
+        rt_kprintf("Usage: ls2k3000_block_crc device start_sector sectors(1..131072)\n");
+        return -RT_EINVAL;
+    }
+
+    start = strtoull(argv[2], &end, 0);
+
+    if (!argv[2][0] || *end)
+    {
+        return -RT_EINVAL;
+    }
+
+    sectors = strtoull(argv[3], &end, 0);
+
+    if (!argv[3][0] || *end || !sectors || sectors > 131072)
+    {
+        return -RT_EINVAL;
+    }
+
+    device = rt_device_find(argv[1]);
+
+    if (!device || device->type != RT_Device_Class_Block ||
+        rt_device_open(device, RT_DEVICE_OFLAG_RDONLY))
+    {
+        return -RT_ENOSYS;
+    }
+
+    buffer = rt_malloc(READ_BYTES);
+
+    if (!buffer || rt_device_control(device, RT_DEVICE_CTRL_BLK_GETGEOME, &geometry) ||
+        geometry.bytes_per_sector != 512 || start >= geometry.sector_count ||
+        sectors > geometry.sector_count - start || geometry.sector_count > INT64_MAX)
+    {
+        goto out;
+    }
+
+    for (rt_uint64_t done = 0; done < sectors;)
+    {
+        rt_size_t count = sectors - done < READ_BYTES / 512 ?
+                          sectors - done : READ_BYTES / 512;
+
+        if (rt_device_read(device, start + done, buffer, count) != (rt_ssize_t)count)
+        {
+            rt_kprintf("SECTORCRC READ_FAIL sector=%llu\n", start + done);
+            goto out;
+        }
+
+        total = block_crc(total, buffer, count * 512);
+
+        for (rt_size_t offset = 0; offset < count; offset += 16)
+        {
+            char line[192];
+            int length = rt_snprintf(line, sizeof(line), "SECTORCRC %llu", start + done + offset);
+            rt_size_t group = count - offset < 16 ? count - offset : 16;
+
+            for (rt_size_t index = 0; index < group; ++index)
+            {
+                rt_uint32_t crc = ~block_crc(UINT32_MAX, buffer + (offset + index) * 512, 512);
+
+                length += rt_snprintf(line + length, sizeof(line) - length, " %08x", crc);
+            }
+
+            rt_kprintf("%s\n", line);
+        }
+
+        done += count;
+    }
+
+    result = RT_EOK;
+
+out:
+    rt_free(buffer);
+    rt_device_close(device);
+    rt_kprintf("SECTORCRC %s device=%s start=%llu sectors=%llu crc32=%08x\n",
+               result ? "FAIL" : "PASS", argv[1], start, sectors, ~total);
+    return result;
+}
+
+MSH_CMD_EXPORT(ls2k3000_block_crc, Read-only per-sector CRC reference comparison);

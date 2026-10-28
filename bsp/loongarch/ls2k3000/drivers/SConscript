@@ -23,7 +23,21 @@ for directory in ('boards', 'display', 'pcie', 'storage', 'sd', 'net', 'power',
 
 if GetDepend('BSP_USING_NOVAUI'):
     ui_dir = os.environ['NOVAUI_RTOS_DIR']
-    group += SConscript(os.path.join(ui_dir, 'SConscript'),
-                        variant_dir='novaui', duplicate=0)
+    # The board starts the embedded ELF from ROMFS instead of copying it to tmpfs.
+    VariantDir('novaui', ui_dir, duplicate=0)
+    ui_sources = ['novaui/display_service.c']
+
+    if GetDepend('BSP_NOVAUI_SINGLE_BUFFER'):
+        ui_sources += ['novaui/frame_copy.c']
+
+    if GetDepend('BSP_USING_SELFTEST'):
+        ui_sources += ['novaui/thread_probe.c']
+
+    group += DefineGroup('LS2K3000 NovaUI service', ui_sources,
+                         depend=['BSP_USING_NOVAUI'], CPPPATH=[ui_dir],
+                         LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Wno-unused-parameter',
+                                        '-Wno-ignored-qualifiers'])
+    group += SConscript(os.path.join(ui_dir, '../../src/measure/cpu/SConscript'),
+                        variant_dir='novaui/cpu-measure', duplicate=0)
 
 Return('group')

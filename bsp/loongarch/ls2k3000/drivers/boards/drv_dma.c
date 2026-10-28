@@ -11,7 +11,9 @@
 /*
  * Description:
  *   Permanently pin DMA buffers outside the heap and Smart page allocator.
- *   Clear inherited cache aliases once, before secondary CPUs are started.
+ *   Use the cached alias for the Explorer's coherent DMA fabric. Mixing CPU
+ *   uncached accesses with DMA accesses through shared cache loses ownership
+ *   updates after a descriptor cache line has been fetched by the device.
  */
 
 #include <rthw.h>
@@ -22,6 +24,7 @@
 static struct rt_spinlock pool_lock;
 static rt_size_t allocated;
 static int pool_ready;
+static uint32_t coherent_config;
 
 int ls2k3000_dma_init(void)
 {
@@ -34,6 +37,20 @@ int ls2k3000_dma_init(void)
         l2_line < 4 || l2_line > 8 || rt_hw_cpu_id() != 0)
     {
         return -RT_ENOSYS;
+    }
+
+    /* The physical Explorer exposes this chip register; synthetic QEMU
+     * handoffs have no such resource. Never change the firmware DMA policy. */
+    if (ls2k3000_boot->reset_address == UINT64_C(0x10150030))
+    {
+        coherent_config = HWREG32(LOONGARCH_PHYS_UNCACHED(0x1fe00470));
+
+        /* Match the Explorer firmware policy observed with its working
+         * coherent Linux drivers. Other policies need explicit validation. */
+        if (coherent_config != 0)
+        {
+            return -RT_ENOSYS;
+        }
     }
 
     for (rt_ubase_t offset = 0; offset < LS2K3000_DMA_BYTES; offset += 1UL << l1_line)
@@ -80,9 +97,18 @@ void *ls2k3000_dma_alloc(rt_size_t bytes, rt_size_t alignment, uint64_t *physica
     allocated = offset + bytes;
     rt_spin_unlock_irqrestore(&pool_lock, level);
     *physical = LS2K3000_DMA_PHYS + offset;
-    address = (void *)LOONGARCH_PHYS_UNCACHED(*physical);
+    address = (void *)LOONGARCH_PHYS_CACHED(*physical);
     rt_memset(address, 0, bytes);
     rt_hw_dmb();
     return address;
 }
+
+static void ls2k3000_dma_status(void)
+{
+    rt_kprintf("DMA: coherent cached pool=%lx used=%lu capacity=%lu config=%08x ready=%d\n",
+               (unsigned long)LS2K3000_DMA_PHYS, (unsigned long)allocated,
+               (unsigned long)LS2K3000_DMA_BYTES, coherent_config, pool_ready);
+}
+
+MSH_CMD_EXPORT(ls2k3000_dma_status, Show dedicated coherent DMA pool);
 #endif

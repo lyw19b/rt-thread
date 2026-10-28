@@ -34,6 +34,7 @@ struct native_mmc
     uint32_t requests;
     uint32_t errors;
     uint32_t last_command;
+    uint32_t last_argument;
     int last_error;
 };
 
@@ -116,6 +117,7 @@ static void native_command(struct native_mmc *dev, struct rt_mmcsd_cmd *cmd)
     struct ls2k3000_mmc_command transfer = {0};
     struct rt_mmcsd_data *data = cmd->data;
     unsigned int response = resp_type(cmd);
+    int stop_busy;
 
     command_fail(cmd, RT_EOK);
 
@@ -140,7 +142,9 @@ static void native_command(struct native_mmc *dev, struct rt_mmcsd_cmd *cmd)
 
         /* Permit only SDR width/timing and cache disable. In particular, do
          * not expose partition/OTP programming or enable an unflushed cache. */
-        if (((cmd->arg >> 24) & 3U) != 3 || !supported || (cmd->arg & 255U))
+        /* Normal command set is 1 in both the MMC core and the Linux driver.
+         * Also accept 0 (the current set), but no other set/reserved bits. */
+        if (((cmd->arg >> 24) & 3U) != 3 || !supported || (cmd->arg & 255U) > 1)
         {
             command_fail(cmd, -RT_EPERM);
             return;
@@ -168,7 +172,9 @@ static void native_command(struct native_mmc *dev, struct rt_mmcsd_cmd *cmd)
     transfer.response_crc = response != RESP_NONE && response != RESP_R3 && response != RESP_R4;
     transfer.timeout_ms = data || transfer.response_busy ? 5000 : 1000;
 
-    if (cmd->busy_timeout)
+    /* The legacy core does not initialize this optional field for CMD8/R7.
+     * Only R1b commands have a busy interval to override. */
+    if (transfer.response_busy && cmd->busy_timeout)
     {
         if (cmd->busy_timeout > 10000)
         {
@@ -196,9 +202,33 @@ static void native_command(struct native_mmc *dev, struct rt_mmcsd_cmd *cmd)
         transfer.write = direction == DATA_DIR_WRITE;
     }
 
+    stop_busy = transfer.response_busy && cmd->cmd_code == 12;
+
+    if (stop_busy)
+    {
+        if (!dev->host->card)
+        {
+            command_fail(cmd, -RT_EIO);
+            return;
+        }
+
+        /* CMD12 after a read may not produce a DAT0 busy edge. Complete its
+         * response, then verify readiness with CMD13 instead of waiting for
+         * a possibly absent busy interrupt. Keep the original R1 response. */
+        transfer.response_busy = 0;
+    }
+
     ++dev->requests;
     dev->last_command = cmd->cmd_code;
+    dev->last_argument = cmd->arg;
     cmd->err = native_error(ls2k3000_mmc_transfer(&dev->controller, &transfer));
+
+    if (!cmd->err && stop_busy)
+    {
+        cmd->err = native_error(ls2k3000_mmc_wait_ready(&dev->controller,
+                                 dev->host->card->rca, transfer.timeout_ms));
+    }
+
     dev->last_error = cmd->err;
     rt_memcpy(cmd->resp, transfer.response, sizeof(cmd->resp));
 
@@ -371,17 +401,26 @@ static int register_host(uint64_t address, int emmc,
 
     controller->dma_address = physical;
     rt_memset(controller->dma, 0, sizeof(*controller->dma));
-    if ((pci && ls2k3000_pci_command(pci, 6, 0)) ||
-        ls2k3000_mmc_quiesce(controller))
+    if (pci && ls2k3000_pci_command(pci, 6, 0))
     {
         controller->fault = 1;
-
-        if (pci)
-        {
-            ls2k3000_pci_command(pci, 0, 4);
-        }
+        ls2k3000_pci_command(pci, 0, 4);
 
         return -RT_EIO;
+    }
+
+    /* On Explorer, QUERY before the first descriptor leaves START pending
+     * indefinitely. Stop the inherited channels without an initial QUERY.
+     * Request completion/error paths still query and confirm DMA ownership
+     * before copying data or reusing buffers submitted by this driver. */
+    for (unsigned int channel = 0; channel < 2; ++channel)
+    {
+        unsigned int reg = channel ? LSD_DMA_READ : LSD_DMA_WRITE;
+
+        native_barrier(dev);
+        native_write(dev, reg + 4, 0);
+        native_write(dev, reg, controller->dma_address | LSD_DMA_64BIT | LSD_DMA_STOP);
+        rt_thread_mdelay(1);
     }
 
     host = mmcsd_alloc_host();
@@ -391,6 +430,9 @@ static int register_host(uint64_t address, int emmc,
         return -RT_ENOMEM;
     }
 
+    /* The non-DM core defaults every host to "sd". Each physical disk and
+     * its partitions need a distinct name when eMMC and SD are both online. */
+    rt_snprintf(host->name, sizeof(host->name), "mmc%u", device_count);
     host->private_data = dev;
     host->ops = &native_ops;
     host->freq_min = (controller->input_clock + 1022U) / 1023U;
@@ -496,6 +538,13 @@ static void ls2k3000_mmc_status(void)
                    dev->host->card ? "present" : "absent", dev->controller.clock,
                    dev->controller.width, dev->requests, dev->errors,
                    dev->last_command, dev->last_error, dev->controller.fault);
+        rt_kprintf("MMC registers: argument=%08x response=%08x command=%08x status=%08x dma=%08x\n",
+                   dev->last_argument, dev->controller.last_response,
+                   dev->controller.last_command_status, dev->controller.last_status,
+                   dev->controller.last_dma_state);
+        rt_kprintf("MMC data: control=%08x status=%08x fifo=%08x order=%08x\n",
+                   dev->controller.last_data_control, dev->controller.last_data_status,
+                   dev->controller.last_fifo_status, dev->controller.last_dma_order);
         mmcsd_host_unlock(dev->host);
     }
 

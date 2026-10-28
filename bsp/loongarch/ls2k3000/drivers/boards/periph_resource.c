@@ -5,12 +5,12 @@
  *
  * Change Logs:
  * Date           Author                    Notes
- * 2026-10-28     LoongsonLab               align file header with LS2K0300
+ * 2026-10-28     LoongsonLab               support Explorer fixed APB without PCI function
  */
 
 /*
  * Description:
- *   Map retained PCI resources and use the CPU constant counter for timeouts.
+ *   Map retained PCI or Explorer fixed APB resources and provide timeouts.
  * Notes:
  *   Use firmware-assigned BARs; do not reallocate PCI resources or change pad mux.
  */
@@ -110,6 +110,19 @@ int ls2k3000_periph_map(uint16_t pci_id, unsigned int offset,
         io->read = native_read;
         io->write = native_write;
         io->now_us = native_now;
+        return RT_EOK;
+    }
+
+    /* Explorer V5.0.0343 hides the APB PCI function. Its DSDT describes
+     * fixed RTC/PWM/GPIO resources in 0x10100000..0x1017ffff instead.
+     * Use that board layout only with the independently validated FADT
+     * reset register; a present but invalid PCI resource must not fall back.
+     */
+    if (pci_id == 0x7a42 &&
+        ls2k3000_boot->reset_address == UINT64_C(0x10150030) &&
+        ls2k3000_boot->reset_bits == 32 && ls2k3000_boot->reset_value == 1)
+    {
+        ls2k3000_periph_fixed(UINT64_C(0x10100000) + offset, io);
         return RT_EOK;
     }
 

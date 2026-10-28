@@ -72,7 +72,7 @@ def main():
                 (output / 'serial.log').write_bytes(log)
 
             if b'Kernel arena unavailable; firmware memory preserved.' in log:
-                result['failure'] = 'UEFI rejected the fixed 224 MiB arena before kernel entry'
+                result['failure'] = 'UEFI rejected the fixed kernel arena before kernel entry'
                 break
 
             if not sent and b'msh />' in log:

@@ -40,6 +40,7 @@ struct explorer_gmac
     unsigned int fault;
     uint32_t dropped;
     uint32_t bus_errors;
+    uint8_t last_rx_header[16];
 };
 
 static struct explorer_gmac ports[PORTS];
@@ -272,6 +273,8 @@ static struct pbuf *receive(rt_device_t parent)
 
         if (bytes > 0)
         {
+            rt_memcpy(device->last_rx_header, data,
+                      bytes < 16 ? (unsigned int)bytes : 16);
             packet = pbuf_alloc(PBUF_RAW, bytes + ETH_PAD_SIZE, PBUF_POOL);
 
 #if ETH_PAD_SIZE
@@ -449,10 +452,34 @@ static long ls2k3000_net_status(void)
         }
 
         rt_mutex_take(&device->lock, RT_WAITING_FOREVER);
-        rt_kprintf("%s phy=%u link=%d speed=%u tx=%llu rx=%llu drop=%u buserr=%u fault=%u\n",
+        rt_kprintf("%s phy=%u link=%d speed=%u tx=%llu rx=%llu drop=%u buserr=%u fault=%u txerr=%llu rxerr=%llu pending=%u\n",
                    device->name, device->core.phy, device->core.link, device->core.speed,
                    device->core.tx_packets, device->core.rx_packets,
-                   device->dropped, device->bus_errors, device->fault);
+                   device->dropped, device->bus_errors, device->fault,
+                   device->core.tx_errors, device->core.rx_errors, device->core.tx_pending);
+        rt_kprintf("GMAC registers: config=%08x bus=%08x control=%08x status=%08x tx=%08x rx=%08x\n",
+                   register_read(device, GMAC_CONFIG), register_read(device, GMAC_DMA_BUS),
+                   register_read(device, GMAC_DMA_CONTROL), register_read(device, GMAC_DMA_STATUS),
+                   register_read(device, 0x1048), register_read(device, 0x104c));
+        rt_kprintf("GMAC ring: head=%u tail=%u rx=%u\n",
+                   device->core.tx_head, device->core.tx_tail, device->core.rx_head);
+
+        for (unsigned int slot = 0; slot < 4; ++slot)
+        {
+            struct ls2k_gmac_desc *desc = &device->core.tx.desc[slot];
+
+            rt_kprintf("TX%u: %08x %08x %08x %08x\n", slot,
+                       desc->status, desc->length, desc->buffer, desc->next);
+        }
+
+        rt_kprintf("GMAC last RX header:");
+
+        for (unsigned int byte = 0; byte < sizeof(device->last_rx_header); ++byte)
+        {
+            rt_kprintf(" %02x", device->last_rx_header[byte]);
+        }
+
+        rt_kprintf("\n");
         rt_mutex_release(&device->lock);
     }
 
