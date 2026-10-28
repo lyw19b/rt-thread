@@ -19,6 +19,16 @@ PKGS_DIR := packages
 config RT_MMCSD_STACK_SIZE
     default 16384 if BSP_USING_LS2K3000_MMC && RT_USING_SMART
 
+# Keep packet storage and core mailboxes large enough for bounded RX bursts.
+config RT_LWIP_PBUF_NUM
+    default 64 if BSP_USING_LS2K3000_GMAC
+
+config RT_LWIP_TCPTHREAD_MBOX_SIZE
+    default 32 if BSP_USING_LS2K3000_GMAC
+
+config RT_LWIP_ETHTHREAD_MBOX_SIZE
+    default 32 if BSP_USING_LS2K3000_GMAC
+
 source "$(RTT_DIR)/Kconfig"
 osource "$PKGS_DIR/Kconfig"
 
@@ -174,6 +184,15 @@ config BSP_LS2K3000_MDIO_CLOCK
     help
         Encoding 4 divides the CSR clock by 102 (150-250 MHz range).
         Verify the actual CSR clock before hardware validation.
+
+config BSP_GMAC_UDP_QUEUE_SIZE
+    int "Bounded UDP receive mailbox entries"
+    depends on BSP_USING_LS2K3000_GMAC
+    range 16 256
+    default 64
+    help
+        Reuse the LoongArch GMAC lwIP wrapper to retain receive bursts until
+        the socket thread can drain them. The common lwIP port stays unchanged.
 
 menu "LS2K3000 low-speed peripherals"
 

@@ -17,6 +17,9 @@
 #include <rthw.h>
 #include <netif/ethernetif.h>
 #include <lwip/pbuf.h>
+#include <lwip/tcpip.h>
+#include <lwip/etharp.h>
+#include <ipc/completion.h>
 #include "ls2k3000_pci.h"
 #include "gmac.h"
 
@@ -487,3 +490,91 @@ static long ls2k3000_net_status(void)
 }
 
 MSH_CMD_EXPORT(ls2k3000_net_status, Show Explorer polled Ethernet state);
+
+#ifdef RT_USING_FINSH
+/* The request outlives a timed-out shell caller. A late callback may finish it,
+ * but a second command cannot replace its netif or reset its completion first. */
+static struct
+{
+    struct rt_completion completion;
+    struct netif *netif;
+    unsigned int caller_active;
+    unsigned int callback_pending;
+} arp_diagnostic;
+
+static void clear_arp_in_core(void *argument)
+{
+    RT_UNUSED(argument);
+    etharp_cleanup_netif(arp_diagnostic.netif);
+    rt_completion_done(&arp_diagnostic.completion);
+    __atomic_store_n(&arp_diagnostic.callback_pending, 0, __ATOMIC_RELEASE);
+}
+
+static long ls2k3000_net_arp_clear(int argc, char **argv)
+{
+    const char *name = argc == 2 ? argv[1] : "e0";
+    struct netif *netif = RT_NULL;
+    rt_err_t result;
+    err_t queued;
+
+    if (argc > 2)
+    {
+        rt_kprintf("usage: ls2k3000_net_arp_clear [e0|e1]\n");
+        return -RT_EINVAL;
+    }
+
+    for (unsigned int index = 0; index < PORTS; ++index)
+    {
+        if (ports[index].registered && !rt_strcmp(name, ports[index].name))
+        {
+            netif = ports[index].ethernet.netif;
+            break;
+        }
+    }
+
+    if (!netif)
+    {
+        return -RT_ENOSYS;
+    }
+
+    if (__atomic_exchange_n(&arp_diagnostic.caller_active, 1, __ATOMIC_ACQ_REL))
+    {
+        return -RT_EBUSY;
+    }
+
+    if (__atomic_load_n(&arp_diagnostic.callback_pending, __ATOMIC_ACQUIRE))
+    {
+        __atomic_store_n(&arp_diagnostic.caller_active, 0, __ATOMIC_RELEASE);
+        rt_kprintf("ARP clear: previous callback still pending\n");
+        return -RT_EBUSY;
+    }
+
+    arp_diagnostic.netif = netif;
+    rt_completion_init(&arp_diagnostic.completion);
+    __atomic_store_n(&arp_diagnostic.callback_pending, 1, __ATOMIC_RELEASE);
+    queued = tcpip_try_callback(clear_arp_in_core, RT_NULL);
+
+    if (queued != ERR_OK)
+    {
+        __atomic_store_n(&arp_diagnostic.callback_pending, 0, __ATOMIC_RELEASE);
+        result = -RT_EBUSY;
+    }
+    else
+    {
+        result = rt_completion_wait(&arp_diagnostic.completion,
+                                    rt_tick_from_millisecond(2000));
+    }
+
+    __atomic_store_n(&arp_diagnostic.caller_active, 0, __ATOMIC_RELEASE);
+    rt_kprintf("ARP clear: interface=%s queued=%d result=%d pending=%u\n",
+               name, queued, result,
+               __atomic_load_n(&arp_diagnostic.callback_pending, __ATOMIC_ACQUIRE));
+    return result;
+}
+
+/* FinSH stores argv handlers in its generic syscall_func table. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+MSH_CMD_EXPORT(ls2k3000_net_arp_clear, Clear interface ARP entries in the lwIP core for diagnosis);
+#pragma GCC diagnostic pop
+#endif

@@ -61,10 +61,15 @@ def main():
     parser.add_argument('--peer', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--window', type=int, choices=range(1, 17), default=1,
-                        help='Outstanding UDP datagrams; default matches the one-slot receive mailbox')
+                        help='Outstanding UDP datagrams; use explicit windows for burst tests')
+    parser.add_argument('--cold-arp', action='store_true',
+                        help='Clear board e0 ARP entries immediately before UDP; no prewarming or retries')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    result = {'status': 'FAIL', 'peer': args.peer, 'udp_window': args.window}
+    result = {'status': 'FAIL', 'peer': args.peer, 'udp_window': args.window,
+              'cold_arp': args.cold_arp}
+    active_endpoint = None
+    endpoint_deadline = 0.0
 
     with serial.Serial(args.port, 115200, timeout=0.2, exclusive=True) as port, \
             (args.output / 'serial.log').open('wb') as log:
@@ -101,14 +106,29 @@ def main():
         try:
             command('')
             result['before'] = counters(command('ls2k3000_net_status'))
+
+            if args.cold_arp:
+                result['arp_clear'] = command('ls2k3000_net_arp_clear e0')
+                cleared = re.search(
+                    r'^ARP clear: interface=e0 queued=0 result=0 pending=0\s*$',
+                    result['arp_clear'], re.MULTILINE)
+
+                if cleared is None:
+                    raise RuntimeError('Board ARP clear did not complete successfully')
+
+            active_endpoint = 'udp'
+            endpoint_deadline = time.monotonic() + 45
             port.write(b'gmac_echo 45\r')
             receive(b'45 seconds')
             verify_udp(args.peer, args.window)
             result['udp'] = receive(timeout=55)
+            active_endpoint = None
 
             if 'packets=10000 ' not in result['udp'] or 'result=0' not in result['udp']:
                 raise RuntimeError('UDP endpoint count/result mismatch')
 
+            active_endpoint = 'tcp'
+            endpoint_deadline = time.monotonic() + 120
             port.write(b'gmac_tcp_echo 120\r')
             receive(b'deadline=120 seconds')
             start = time.monotonic()
@@ -137,6 +157,7 @@ def main():
 
             result['tcp_seconds'] = time.monotonic() - start
             result['tcp'] = receive()
+            active_endpoint = None
 
             if f'bytes={total} result=0' not in result['tcp']:
                 raise RuntimeError('TCP endpoint count/result mismatch')
@@ -153,7 +174,30 @@ def main():
 
             result['status'] = 'PASS'
         except Exception as error:
+            # Preserve the first failure. Diagnostics must never replace it or
+            # turn a partial run into PASS; keep the finite echo server's summary.
             result['error'] = str(error)
+            diagnostics = []
+
+            if active_endpoint:
+                try:
+                    remaining = max(0.0, endpoint_deadline - time.monotonic()) + 10
+                    result[active_endpoint + '_failure_summary'] = receive(timeout=remaining)
+                    active_endpoint = None
+                except Exception as diagnostic_error:
+                    diagnostics.append('endpoint summary: ' + str(diagnostic_error))
+
+            # A command is safe only after the echo endpoint returned its prompt.
+            if active_endpoint is None:
+                try:
+                    result['after_failure'] = counters(command('ls2k3000_net_status'))
+                    result['ui_after_failure'] = command('novaui_status')
+                except Exception as diagnostic_error:
+                    diagnostics.append('post-failure status: ' + str(diagnostic_error))
+
+            if diagnostics:
+                result['diagnostic_errors'] = diagnostics
+
             raise
         finally:
             (args.output / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
