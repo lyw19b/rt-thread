@@ -37,15 +37,16 @@ Description:
    芯片手册 RST_CNT.OS_RST 和实板重启结果一致，因此采用明确的板级兼容处理。
 8. GMAC2 板级 lwIP 接口：PCI 资源匹配、固件 MAC、双端口独立 DMA 环、
    PHY 链路轮询、2 秒复位上限及多通道 DMA 错误位处理。代码及八核配置编译
-   完成，已实板验证 DHCP、ping、UDP 单包与 TCP 校验，突发限制见文末。共享
+   完成，已实板验证 DHCP、ping、UDP 单包及 16 包窗口与 TCP 校验，边界见文末。共享
    GMAC 引擎只增加可选超时/状态位配置，旧板
    的零初始化默认行为保持原样。
 9. SD/eMMC 原生命令主机：drivers/sd，SD 1/4 位、eMMC 1/4/8 位 SDR，
    CMD1/EXT_CSD、DMA bounce buffer、单块/多块传输、软件 STOP、超时隔离。
    接入现有 MMC/SD 和块设备层，不修改公共组件。默认拒绝块写入和擦除；
-   不自动挂载，不暴露 eMMC boot/RPMB 分区。实际读写与电气时序待验证。
-10. HID 鼠标描述符解析器已有实现及主机单测，原生 xHCI HCD 和完整输入链路
-    尚未完成，不能据此认为 USB 鼠标已经可用。
+   不自动挂载，不暴露 eMMC boot/RPMB 分区。只读实板验证见文末；写入未验证。
+10. BSP 原生轮询 xHCI 已接入 USB2 根端口直连 HID 鼠标，注册 mouse 指针
+    设备并接入 NovaUIOS 光标、左键及拖动。已实板枚举，操作确认见文末。
+    不支持 Hub 路由、USB3 设备、UVC 摄像头；滚轮目前仅记录诊断计数。
 11. 单独保留主机故障注入测试和 QEMU 通用架构测试，见后文。
 
 内存及 DMA
@@ -74,9 +75,11 @@ NVMe 支持 64 位 DMA，当前低 DDR 地址是独立保留区的位置，不�
   1920x1080 输出，并由用户确认文字、色条和细字体正常。
 - NVMe Identify/扇区读取、断连及超时；写入默认关闭。13 个 PCI 设备的
   固件清单与原生配置空间 ID 已全部比对一致。
-- 原生以太网已通过本轮基本收发及数据校验，UDP 突发仍有限制。MSI/路由尚未接入。
-- 原生 USB xHCI HCD 和设备类：尚未接入此 BSP。
-- eMMC/SD 时钟及 ACPI 资源已确认，但实板 DMA 数据路径未通过，详见文末。
+- 原生以太网已通过本轮基本收发及 16 包窗口校验；不保证任意突发零丢包。
+  MSI/路由尚未接入；双网口同时饱和及更大窗口尚未验证。
+- 原生 USB 目前仅实现直连 USB2 HID 鼠标；UVC、Hub 和 USB 存储仍待实现。
+- eMMC/SD 只读 DMA 已实板通过顺序/随机读取及稳定区间跨系统 CRC 比对；
+  写入、擦除和热插拔尚未验证，详见文末。
 - SATA SSD、原生显示控制、完整电源管理：尚未接入此 BSP。
 - SPI/I2C/RTC/GPIO/PWM/看门狗及 HPET 计数接口已接入，实板验证边界见下文。
 - NovaUIOS 已完成单缓冲适配及通用 QEMU 八核运行。实板扩展内存版 EFI
@@ -687,3 +690,134 @@ mmc23-second-reference-console.log、mmc23-emmc-sector-crc-second.log、
 mmc23-sector-comparison.json（首轮FAIL，明确单个FSInfo差异）、
 mmc23-linux-after-rt-comparison.json、mmc23-stable-sector-comparison.json（均PASS）、
 mmc23-production-driver-match.json、mmc23-final-status.log。
+
+
+2026-10-28 扩大只读存储测试与 USB 输入基线
+------------------------------------------
+同一 mmc23 Smart 八核镜像执行 ls2k3000_block_test mmc0 64 / mmc1 64。
+每盘前 64 MiB 顺序读取两遍，另读 128 个随机位置各两遍（包含最后扇区），
+每盘实际读取 138412032 字节（132 MiB），两盘合计 264 MiB。
+eMMC 两遍 CRC32=b815a76f，SD 两遍 CRC32=cd57d706；均 PASS。
+最终 MMC0 req=19026、MMC1 req=16918，两个控制器 err=0、fault=0。
+此轮没有再次取得 Linux 对同一时刻 64 MiB 的参考；不将重复读取一致
+等同于跨系统数据校验，也不把读取压力计入写入/擦除验证。
+随后通过原生 reboot 返回默认 Linux 成功，未更换固件或默认引导项。
+
+Linux 重新核对实际 USB 拓扑：00:19.0（7a34）USB2 根端口 1 为
+2717:503a Telink Xiaomi Wireless Mouse Lite 2，12 Mbit/s，直接连接。
+设备 EP0 最大包 8；接口 0 为 HID boot mouse；中断 IN 端点 0x82，
+最大包 8，间隔 4 ms；报告描述符 166 字节、鼠标 Report ID=1。
+同控制器根端口 2 识别 0c45:636b 摄像头，480 Mbit/s；以太网 Linux
+确认 1000 Mbit/s Full 链路。此处仅为硬件基线，不能算 RT-Thread USB 通过。
+
+
+2026-10-28 原生 xHCI 鼠标与 NovaUIOS 输入链路
+--------------------------------------------
+BSP_USING_USB_MOUSE / build_kernel.py --usb-mouse 启用板级轮询驱动；
+实现位于 drivers/usb，不修改 RT-Thread 公共 USB、触摸或内核代码。
+两控制器独立保留 coherent DMA；支持 32/64 字节 context、64 位 DMA、
+EP0 枚举、HID 描述符和中断 IN。控制命令及停机有超时上限，失败后保留
+DMA arena，不能确认停机时隔离控制器，避免迟到 DMA 写到已回收内存。
+按键边沿使用有界队列，短点击保留 DOWN/UP；溢出或拔出保证释放按键。
+NovaUIOS 优先使用 touch，缺省时使用 mouse；协议复用 reserved 的鼠标
+标记位，既有字段大小不变；鼠标显示小圆形光标，触摸输入保持隐藏光标。
+
+实板定位的两个问题：
+1. 初版 PCI Command 同时要求 INTX_DISABLE/MEM/BME，读回校验失败，HCD
+   未启动。改为只要求 MEM/BME，由 xHCI USBCMD.INTE/IMAN.IE 关闭中断，
+   两个控制器均能启动。未单独证明 PCI bit10 的硬件语义，不写成芯片缺陷。
+2. mouse 已枚举但 UI 服务初始化失败：公共 dev_touch.c 将 GET_INFO 委托
+   驱动实现；初版驱动返回 ENOSYS。板级 mouse_control 补齐信息复制和空参
+   检查，v4 NovaUIOS READY 1920x1080，八核在线，服务 active=1/errors=0。
+
+主机 ASan/UBSan 回归直接编译生产 xHCI、mouse_pointer 和 RT 适配文件：
+- 真实 166 字节 HID fixture，20000 份报告、200 次重连，32/64 字节 context；
+- 高 DMA、短包、错误配置、STALL、超时隔离、失败停机后不改 DCBAA；
+- GET_INFO、hover、短点击、拖动、拔出释放、队列溢出、tick 回绕；
+- 全控制器失败、单控制器失败、注册失败后的停机及 BME 隔离；
+- NovaUIOS 输入边界、显存所有权、故障恢复和部分用户拷贝拒绝。
+以上宿主结果不替代实板调度、USB 电气或显示交互验证。
+测试保留在主项目 system/driver/tests/rtos/test_ls2k3000_usb_mouse*.py、
+test_smart_display_retry.py，测试生成物不提交。
+
+v4 全新 Smart SMP 构建包含网络、MMC、外设、鼠标及 1920x1080 NovaUIOS。
+rtthread.bin SHA-256：
+4d404877e7853af31bfc799a03e04722888f7a7fb38b91dc41a18e4a9d547c13
+EFI SHA-256：
+c5aba585d259e372e99990c186b7fd095c982b1eccb6a545ef932215ce597684
+沿用临时单次 GRUB 启动，默认 Linux 与 UEFI 固件保持原样。
+
+2026-10-28 GMAC UDP 突发逐层排查
+--------------------------------
+初版 UDP 接收 mailbox=1。BSP 包装配置增加 UDP mailbox=64、NETBUF=128、
+接收字节上限=64*1472、PBUF=64、TCP/IP mailbox=32；不修改公共 lwipopts.h。
+仅做这些修改仍不足：v3 先从板卡 ping 主机 4/4，已有 ARP 邻居的 16 包
+窗口仍缺序号 12、13，服务端只接收 14 包；GMAC drop/txerr/rxerr/buserr/
+fault 均为 0，UI 当时尚未恢复，因此不能归因于 UI 或仅归因于 ARP。
+检查到 tcpip_inpkt 在投递 mailbox 前申请 MEMP_TCPIP_MSG_INPKT，
+默认池仅 8 项，可能在 mailbox 仍有空间时返回 ERR_MEM。v4 只将此池
+匹配到配置的 32 项，ARP_QUEUE_LEN=3、MEMP_NUM_ARP_QUEUE=30 保持不变。
+新增 ls2k3000_net_arp_clear 在 TCP/IP 核心线程中清理指定接口 ARP；
+2 秒有限等待、静态请求保护晚到回调，繁忙时拒绝新调用。诊断回归覆盖
+满邮箱、晚到回调与并发调用。网络运行器保留原始失败及服务端最终包数，
+诊断失败不能替换原始失败，更不能将部分运行标为 PASS。
+
+v4 暖邻居实测：window=16，10000 UDP 回显全部逐包匹配、16 MiB TCP
+逐块匹配，GMAC 错误计数均为 0，NovaUIOS active=1/errors=0。
+随后执行 ls2k3000_net_arp_clear，queued=0/result=0/pending=0。
+v4 冷邻居：服务端收到并提交 16 包回显，result=0；主机缺序号 0..3，
+GMAC 错误计数仍为 0。该失效发生在回包路径，与暖邻居缺包不同。
+etharp_query 在未解析邻居的队列超过 ARP_QUEUE_LEN 时释放最旧包，仍返回
+ERR_OK；因此 GMAC 和 sendto 成功不能证明回包已发出。此机制与观测吻合，
+但本次未抓取线上数据包，不将软件推断写成已抓包定位。
+v5 仅进一步在 2K3000 包装配置中设置 ARP_QUEUE_LEN=BSP_GMAC_UDP_QUEUE_SIZE
+（默认 64）、MEMP_NUM_ARP_QUEUE=2*该值（默认 128）。保持有限容量，不改变
+通用 lwIP 算法，也不改变 2K0300 的 ARP 配置。
+本机会话证据：/tmp/ls2k3000-mouse-20261028/v4-warm-window16/result.json
+与 v4-cold-window16/result.json；失败证据保留，不被后续 PASS 覆盖。
+
+v5 实板共存检查：
+- 全新构建无编译警告；Smart 八核上线，1920x1080 NovaUIOS READY。
+- 运行 novaui_test 时，两盘各顺序读取 16 MiB 两遍、128 个随机位置双读；
+  实际共 72 MiB。eMMC 两遍 CRC32=c0ecb2c1，SD 两遍 CRC32=9103203a。
+  两盘 BLOCK PASS；MMC0 req=4692/err=0/fault=0，MMC1 req=4630/err=0/fault=0。
+  eMMC ESP 本轮重新部署镜像，未将 CRC 与部署前介质版本直接比较。
+- RTC PASS，SPI0 JEDEC=ef6017 连续 257 次一致；HPET 计数器和 SPI1 标为
+  UNAVAILABLE，I2C/PWM/GPIO/WDT 注册不算实际外设功能验证。
+- UI AUDIT PASS：1720 views、122975 widgets、39948 buttons、42990 bindings、
+  558 actions、2868 routes；unavailable=36251 为未实现功能提示，不计作支持。
+  巡检后 UI active=1/errors=0，页池剩余 530 页，仍有已知内存余量边界。
+- 实板鼠标 2717:503a 成功枚举，errors/timeouts/malformed/quarantine 均为 0。
+  本轮尚未采到运动报告（reports=0），不能宣称实物点击/拖动通过；等待操作确认。
+- Linux 已识别 0c45:636b 摄像头；RT-Thread 的 UVC/xHCI 采集尚未实现，
+  不能把 Linux 识别或鼠标枚举计入 RT 摄像头通过。
+
+v5 rtthread.bin SHA-256：
+6b012edaf0ef56ed70057979e1c370dd9161e5c75a69fad1c0ae475c504d4b3d
+v5 EFI SHA-256：
+1c27e863d99718a6f9dafbe3aa05cbc80eec5505fd9f6b7b7ad1a82f1b8f9f6b
+本节 v4/v5 是鼠标/网络测试镜像版本，不是前文 EFI 交接协议的版本变化。
+
+最终网络验证（v5，NovaUIOS 和鼠标线程持续运行）：
+- 连续两轮 --window 16 --cold-arp，各清表成功后直接发包，无 ping 预热、
+  丢包重试或放宽比对。每轮 10000 UDP 包/7314829 字节全部匹配，随后
+  16 MiB TCP 全部匹配（37.15 秒、37.65 秒）；两轮 PASS。
+- 首轮同时执行上述 UI 页面审计；第二轮处于恢复的首页。两轮 GMAC
+  drop/txerr/rxerr/buserr/fault=0，pending=0，UI active=1/errors=0。
+- 证据：/tmp/ls2k3000-mouse-20261028/v5-cold-window16/result.json 与
+  v5-cold-window16-repeat/result.json。完整页面审计尾行在首轮 serial.log。
+- 保留复现命令：python3 examples/test/ls2k3000_network_board.py \
+  --port <串口稳定路径> --peer <板卡IP> --window 16 --cold-arp --output <新目录>。
+
+主机容量回归 test_ls2k3000_lwip_capacity.py --rtconfig <生成的rtconfig.h>
+直接链接生产 lwIP etharp/pbuf/memp/ethernet 及 BSP 包装配置，ASan/UBSan PASS。
+实际输入池允许 32 项后有界耗尽；冷 ARP 16/64 包在收到应答后全部按序发出；
+两个邻居各 64 项后全局 128 项达到上限，新包返回 ERR_MEM；清表及超时
+回收后可重用、宿主堆无存活分配。相同算法仅恢复旧 8/3/30 配置，复现
+输入池 8 项耗尽及 ARP 仅保留最后 3 包。宿主不模拟 DMA 或 RT 调度。
+这些结果只保证上述有限条件，不宣称 UDP 不丢包或任意负载稳定。
+
+测试结束后 novaui_stop 正常退出，active=0、页池余量 6713；novaui_start
+重新启动 pid=2，READY、active=1/errors=0，页池余量 549。重新启动 UI
+并未将余量恢复到初次启动的约 11616 页，页缓存/内存占用仍需单独分析，
+不宣称全目录巡检后的内存压力已经解决。当前保持 NovaUIOS 首页。
