@@ -69,6 +69,19 @@ config BSP_USING_PCI_INVENTORY
 config BSP_USING_DMA_POOL
     bool
 
+config BSP_USING_USB_MOUSE
+    bool "Native xHCI USB mouse"
+    select BSP_USING_DMA_POOL
+    select BSP_USING_PCI_INVENTORY
+    select RT_USING_TOUCH
+    select RT_USING_MUTEX
+    default n
+    help
+        Board-owned polled xHCI support for a directly connected USB2 HID mouse.
+        Register mouse as an absolute pointer for NovaUIOS, with left-button
+        click and drag. Firmware supplies controller resources and port power.
+        Hub routing and USB3 devices are not supported by this initial driver.
+
 config BSP_USING_NVME
     bool "NVMe SSD (one namespace, polled queues)"
     select BSP_USING_DMA_POOL

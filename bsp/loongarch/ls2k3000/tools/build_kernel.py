@@ -37,6 +37,8 @@ def main():
     parser.add_argument('--sd-base', type=lambda value: int(value, 0), default=0,
                         help='Verified ACPI SD MMIO base when PCI hides the host')
     parser.add_argument('--network', action='store_true', help='Compile GMAC2/lwIP support')
+    parser.add_argument('--usb-mouse', action='store_true',
+                        help='Compile native xHCI USB2 mouse input')
     parser.add_argument('--peripherals', action='store_true',
                         help='Compile SPI, I2C, RTC, GPIO, PWM, HPET and watchdog')
     parser.add_argument('--test-source', type=Path, help='Inject a retained C acceptance test')
@@ -110,6 +112,10 @@ def main():
                          'CONFIG_SAL_USING_POSIX=y\n'
                          'CONFIG_RT_SYSTEM_WORKQUEUE_STACKSIZE=4096\n')
 
+    if args.usb_mouse:
+        with (board / '.config').open('a') as config:
+            config.write('\nCONFIG_BSP_USING_USB_MOUSE=y\n')
+
     if args.peripherals:
         with (board / '.config').open('a') as config:
             config.write('\nCONFIG_RT_USING_SOFT_RTC=n\n')
@@ -172,6 +178,7 @@ def main():
                 'nvme': args.nvme, 'mmc': args.mmc, 'mmc_clock': args.mmc_clock,
                 'emmc_base': hex(args.emmc_base), 'sd_base': hex(args.sd_base),
                 'network': args.network, 'peripherals': args.peripherals,
+                'usb_mouse': args.usb_mouse,
                 'novaui_sha256': (hashlib.sha256(args.novaui.read_bytes()).hexdigest()
                                   if args.novaui else None),
                 'test_source_sha256': (hashlib.sha256(args.test_source.read_bytes()).hexdigest()
