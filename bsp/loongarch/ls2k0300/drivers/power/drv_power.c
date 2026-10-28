@@ -16,7 +16,7 @@
 #include <rtthread.h>
 #include "drv_power.h"
 
-void rt_hw_cpu_reset(void)
+rt_weak void rt_hw_cpu_reset(void)
 {
     /* Reset/PMIC wiring is board specific; no guessed reset register writes. */
     rt_kprintf("Reset through the board reset button or firmware.\n");

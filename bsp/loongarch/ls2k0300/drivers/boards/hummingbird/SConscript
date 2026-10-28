@@ -1,0 +1,18 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-28     LoongsonLab               isolate Hummingbird board adapters
+
+# Description:
+#   Compile only the selected hummingbird board adapters.
+
+from building import *
+
+cwd = GetCurrentDir()
+group = DefineGroup('LS2K0300 hummingbird', Glob('*.c'), depend=['BSP_USING_HUMMINGBIRD'],
+                    CPPPATH=[cwd],
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+
+Return('group')

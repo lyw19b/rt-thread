@@ -9,6 +9,7 @@
  * 2026-10-25     LoongsonLab               add bounded high-address USB host support
  *
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ * 2026-10-28     LoongsonLab               keep Hub polling on the active ISO frame list
  */
 
 /*
@@ -257,7 +258,17 @@ static int transfer_chunk(struct ls2k_ehci *hc, struct ls2k_usb_transfer *x, uin
             }
         }
 
-        write_reg(hc, LUSB_PERIODIC, dma_at(hc, offsetof(struct ls2k_usb_dma, frames)));
+#ifdef LS2K_EHCI_CAMERA
+        if (hc->iso)
+        {
+            write_reg(hc, LUSB_PERIODIC,
+                      hc->iso->physical + offsetof(struct ls2k_iso_dma, frames));
+        }
+        else
+#endif
+        {
+            write_reg(hc, LUSB_PERIODIC, dma_at(hc, offsetof(struct ls2k_usb_dma, frames)));
+        }
         write_reg(hc, LUSB_CMD, read_reg(hc, LUSB_CMD) | LUSB_PSE);
     }
     else

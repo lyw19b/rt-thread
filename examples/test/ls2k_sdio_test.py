@@ -46,6 +46,7 @@ def cross_build(output, toolchain):
         'standard-up': base + '\nCONFIG_RT_USING_SMART=n\nCONFIG_RT_USING_SMP=n\n',
         'sdio1': base + '\nCONFIG_BSP_SDIO_PORT=1\n',
         'smart-sdio0-gmac0': base,
+        'vanguard-dual': base + '\nCONFIG_BSP_USING_VANGUARD=y\nCONFIG_BSP_SDIO_DUAL_HOST=y\nCONFIG_BSP_SDIO_USING_BLOCK_TEST=y\nCONFIG_RT_MMCSD_STACK_SIZE=16384\n',
         'page-sdio0-gmac0': base + '\nCONFIG_KMD_USE_DMW=n\nCONFIG_KMD_USE_PAGE=y\n',
     }
 
@@ -68,8 +69,13 @@ def cross_build(output, toolchain):
         if name != 'disabled':
             assert '#define BSP_USING_GMAC0\n' in header
             assert '#define BSP_USING_GMAC1\n' not in header
-            expected = 1 if name == 'sdio1' else 0
-            assert f'#define BSP_SDIO_PORT {expected}\n' in header
+            if name == 'vanguard-dual':
+                assert '#define BSP_SDIO_DUAL_HOST\n' in header
+                assert '#define RT_MMCSD_STACK_SIZE 16384\n' in header
+                assert '#define BSP_SDIO_ALLOW_WRITE\n' not in header
+            else:
+                expected = 1 if name == 'sdio1' else 0
+                assert f'#define BSP_SDIO_PORT {expected}\n' in header
             prefix = toolchain / 'loongarch64-linux-musl-'
             sections = subprocess.check_output([str(prefix) + 'readelf', '-lW',
                                                 str(bsp / 'rtthread.elf')], text=True)
@@ -90,11 +96,27 @@ def cross_build(output, toolchain):
         print(f'{name}: cross-build and DMA placement PASS', flush=True)
 
 
+def adapter_test(output, compiler):
+    stubs = output / 'adapter-stubs'
+    (stubs / 'drivers').mkdir(parents=True, exist_ok=True)
+    for header in ('rtthread.h', 'rthw.h', 'rtdbg.h', 'ls2k.h', 'ls2k0300.h',
+                   'drivers/dev_mmcsd_core.h'):
+        (stubs / header).write_text('/* RT API supplied by the model fixture. */\n')
+    for name, defines in (('dual', []), ('single', ['-DSDIO_TEST_SINGLE'])):
+        binary = output / f'sdio-adapter-{name}-test'
+        subprocess.run([compiler, '-std=c11', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                        '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
+                        *defines, '-I', str(stubs), '-I', str(DRIVER),
+                        str(ROOT / 'examples/test/ls2k_sdio_adapter_test.c'),
+                        '-o', str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cc', default=os.environ.get('CC', 'cc'))
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--build', action='store_true', help='also cross-build five isolated BSP variants')
+    parser.add_argument('--build', action='store_true', help='also cross-build six isolated BSP variants')
     parser.add_argument('--toolchain', type=Path, help='LoongArch musl compiler bin directory')
     args = parser.parse_args()
     if args.build and not args.toolchain:
@@ -108,6 +130,8 @@ def main():
                str(DRIVER / 'ls2k_sdio.c'), '-o', str(binary)]
     subprocess.run(command, check=True)
     subprocess.run([str(binary)], check=True)
+
+    adapter_test(output, args.cc)
 
     # Compile the actual pool declarations. Mailboxes count pointer-sized slots,
     # not bytes: uint32_t[4] overflows on the third 64-bit host notification.

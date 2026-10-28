@@ -12,11 +12,12 @@
 
 /*
  * Description:
- *   Registers the board SD memory host, interrupt handling and DMA storage.
+ *   Registers independent SD/eMMC hosts, interrupt handling and DMA storage.
  *
  * Notes:
  *   Firmware supplies card power. No card-detect GPIO is assumed: insert the
- *   card before boot and unmount before removing it. Only 3.3 V SDR is exposed.
+ *   card before boot. SD requires 3.3 V, eMMC keeps its fixed board voltage.
+ *   Only SDR is exposed; payload writes require explicit configuration.
  *   MMC/SD bus_lock serializes requests; IRQ code only records status/wakes.
  *
  */
@@ -44,10 +45,18 @@ struct ls2k_sd_host
     rt_uint32_t pending;
     rt_uint32_t requests, errors, interrupts;
     int irq;
+    unsigned int port;
+    unsigned int max_width;
 };
 
-static struct ls2k_sd_host device;
-static struct ls2k_sdio_dma storage __attribute__((section(".sdio_dma"), aligned(64)));
+#ifdef BSP_SDIO_DUAL_HOST
+#define SD_HOST_COUNT 2
+#else
+#define SD_HOST_COUNT 1
+#endif
+
+static struct ls2k_sd_host devices[SD_HOST_COUNT];
+static struct ls2k_sdio_dma storage[SD_HOST_COUNT] __attribute__((section(".sdio_dma"), aligned(64)));
 
 static uint32_t sd_read(void *context, unsigned int reg)
 {
@@ -156,18 +165,70 @@ static int sd_error(int error)
     }
 }
 
+static void command_fail(struct rt_mmcsd_cmd *cmd, int error)
+{
+    cmd->err = error;
+    rt_memset(cmd->resp, 0, sizeof(cmd->resp));
+
+    if (cmd->data)
+    {
+        cmd->data->err = error;
+        cmd->data->bytes_xfered = 0;
+    }
+}
+
 static void sd_command(struct ls2k_sd_host *dev, struct rt_mmcsd_cmd *cmd)
 {
-    struct ls2k_sdio_command transfer = { 0 };
+    struct ls2k_sdio_command transfer = {0};
     struct rt_mmcsd_data *data = cmd->data;
     unsigned int response = resp_type(cmd);
+    int stop_busy;
 
-    /* This host exposes SD memory only, not eMMC or SDIO function devices. */
-    if (cmd->cmd_code == SEND_OP_COND || cmd->cmd_code == SD_IO_SEND_OP_COND)
+    command_fail(cmd, RT_EOK);
+
+    /* CMD5 is SDIO I/O enumeration, not the eMMC memory initialization CMD1.
+     * Reject SD probes on a dedicated eMMC port before they can change state. */
+    if (cmd->cmd_code == SD_IO_SEND_OP_COND ||
+        (dev->controller.emmc && (cmd->cmd_code == APP_CMD ||
+                                 (cmd->cmd_code == SEND_EXT_CSD && !data))) ||
+        (!dev->controller.emmc && cmd->cmd_code == SEND_OP_COND))
     {
-        cmd->err = -RT_ENOSYS;
+        command_fail(cmd, -RT_ENOSYS);
         return;
     }
+
+    if (dev->controller.emmc && cmd->cmd_code == 6)
+    {
+        unsigned int field = (cmd->arg >> 16) & 255U;
+        unsigned int value = (cmd->arg >> 8) & 255U;
+        int supported = (field == 183 && value <= 2) ||
+                        (field == 185 && value <= 1) ||
+                        (field == 33 && value == 0);
+
+        /* Permit only SDR width/timing and cache disable. In particular, do
+         * not expose partition/OTP programming or enable an unflushed cache. */
+        /* Normal command set is 1 in both the MMC core and the Linux driver.
+         * Also accept 0 (the current set), but no other set/reserved bits. */
+        if (((cmd->arg >> 24) & 3U) != 3 || !supported ||
+            (cmd->arg & 255U) > 1 || (cmd->arg & 0xfc000000U) || data)
+        {
+            command_fail(cmd, -RT_EPERM);
+            return;
+        }
+    }
+
+#ifndef BSP_SDIO_ALLOW_WRITE
+    /* Mode selection needed by enumeration is allowed. Block payload writes,
+     * erase and permanent CSD/lock programming remain disabled by default. */
+    if ((data && (data->flags & DATA_DIR_WRITE)) ||
+        cmd->cmd_code == 24 || cmd->cmd_code == 25 || cmd->cmd_code == 26 ||
+        cmd->cmd_code == 27 || (cmd->cmd_code >= 28 && cmd->cmd_code <= 29) ||
+        (cmd->cmd_code >= 32 && cmd->cmd_code <= 38) || cmd->cmd_code == 42)
+    {
+        command_fail(cmd, -RT_EPERM);
+        return;
+    }
+#endif
 
     transfer.index = cmd->cmd_code;
     transfer.argument = cmd->arg;
@@ -177,44 +238,72 @@ static void sd_command(struct ls2k_sd_host *dev, struct rt_mmcsd_cmd *cmd)
     transfer.response_crc = response != RESP_NONE && response != RESP_R3 && response != RESP_R4;
     transfer.timeout_ms = data || transfer.response_busy ? 5000 : 1000;
 
-    if (cmd->busy_timeout && cmd->busy_timeout <= 10000)
+    /* The legacy core does not initialize this optional field for CMD8/R7.
+     * Only R1b commands have a busy interval to override. */
+    if (transfer.response_busy && cmd->busy_timeout)
     {
+        if (cmd->busy_timeout > 10000)
+        {
+            command_fail(cmd, -RT_EINVAL);
+            return;
+        }
+
         transfer.timeout_ms = cmd->busy_timeout;
     }
 
     if (data)
     {
-        data->bytes_xfered = 0;
-        data->err = 0;
+        unsigned int direction = data->flags & (DATA_DIR_READ | DATA_DIR_WRITE);
+
         if (!data->buf || data->sg_len || (data->flags & DATA_STREAM) ||
-            ((data->flags & (DATA_DIR_READ | DATA_DIR_WRITE)) != DATA_DIR_READ &&
-             (data->flags & (DATA_DIR_READ | DATA_DIR_WRITE)) != DATA_DIR_WRITE))
+            (direction != DATA_DIR_READ && direction != DATA_DIR_WRITE))
         {
-            cmd->err = data->err = -RT_EINVAL;
+            command_fail(cmd, -RT_EINVAL);
             return;
         }
 
         transfer.buffer = data->buf;
         transfer.blocks = data->blks;
         transfer.block_size = data->blksize;
-        transfer.write = !!(data->flags & DATA_DIR_WRITE);
+        transfer.write = direction == DATA_DIR_WRITE;
     }
 
-    dev->requests++;
+    stop_busy = transfer.response_busy && cmd->cmd_code == 12;
+
+    if (stop_busy)
+    {
+        if (!dev->host->card)
+        {
+            command_fail(cmd, -RT_EIO);
+            return;
+        }
+
+        /* CMD12 after a read may not produce a DAT0 busy edge. Complete its
+         * response, then verify readiness with CMD13 instead of waiting for
+         * a possibly absent busy interrupt. Keep the original R1 response. */
+        transfer.response_busy = 0;
+    }
+
+    ++dev->requests;
     cmd->err = sd_error(ls2k_sdio_transfer(&dev->controller, &transfer));
+
+    if (!cmd->err && stop_busy)
+    {
+        cmd->err = sd_error(ls2k_sdio_wait_ready(&dev->controller,
+                                 dev->host->card->rca, transfer.timeout_ms));
+    }
+
     rt_memcpy(cmd->resp, transfer.response, sizeof(cmd->resp));
+
     if (cmd->err)
     {
-        dev->errors++;
+        ++dev->errors;
     }
 
     if (data)
     {
         data->err = cmd->err;
-        if (!cmd->err)
-        {
-            data->bytes_xfered = data->blks * data->blksize;
-        }
+        data->bytes_xfered = cmd->err ? 0 : data->blks * data->blksize;
     }
 }
 
@@ -263,7 +352,8 @@ static void sd_iocfg(struct rt_mmcsd_host *host, struct rt_mmcsd_io_cfg *config)
         return;
     }
 
-    sd->width = config->bus_width == MMCSD_BUS_WIDTH_4 ? 4 : 1;
+    sd->width = config->bus_width == MMCSD_BUS_WIDTH_8 ? 8 :
+                config->bus_width == MMCSD_BUS_WIDTH_4 ? 4 : 1;
     if (config->power_mode == MMCSD_POWER_OFF)
     {
         sd_write(dev, LSD_IRQ_ENABLE, 0);
@@ -277,11 +367,20 @@ static void sd_iocfg(struct rt_mmcsd_host *host, struct rt_mmcsd_io_cfg *config)
         return;
     }
 
-    if (config->bus_width != MMCSD_BUS_WIDTH_1 && config->bus_width != MMCSD_BUS_WIDTH_4)
+    if ((config->bus_width != MMCSD_BUS_WIDTH_1 &&
+         config->bus_width != MMCSD_BUS_WIDTH_4 &&
+         config->bus_width != MMCSD_BUS_WIDTH_8) || sd->width > dev->max_width)
     {
         sd->fault = 1;
         LOG_E("unsupported bus width");
         return;
+    }
+
+    /* The MMC core can request 52 MHz for eMMC SDR even with a lower
+     * advertised maximum. Never exceed this board's validated clock. */
+    if (config->clock > host->freq_max)
+    {
+        config->clock = host->freq_max;
     }
 
     if (ls2k_sdio_clock(sd, config->clock))
@@ -304,27 +403,118 @@ static const struct rt_mmcsd_host_ops sd_ops = {
     .get_card_status = sd_card_present,
 };
 
-static int sd_platform_init(struct ls2k_sd_host *dev)
+static unsigned int sd_port(unsigned int index)
 {
-    const unsigned int port = BSP_SDIO_PORT;
-    uint32_t sample = HWREG32(LS2K_UNCACHED(LS2K0300_CLOCK_SAMPLE));
-    uint32_t scale = HWREG32(LS2K_UNCACHED(LS2K0300_CLOCK_SCALE));
-    uint32_t root, divider = (scale >> 24) & 15, old_divider;
-    rt_ubase_t mux;
-    uint32_t mask;
+#ifdef BSP_SDIO_DUAL_HOST
+    return index;
+#else
+    RT_UNUSED(index);
+    return BSP_SDIO_PORT;
+#endif
+}
 
-    if (!port && (sample & (1U << 6)))
+static int sd_is_emmc(unsigned int port)
+{
+#ifdef BSP_SDIO_DUAL_HOST
+    return port == 0;
+#else
+    RT_UNUSED(port);
+    return 0;
+#endif
+}
+
+static rt_ubase_t sd_port_base(unsigned int port)
+{
+    return LS2K_UNCACHED(0x16140000UL + port * 0x8000UL);
+}
+
+/* Keep each QUERY destination forever, including on timeout. The two order
+ * windows can alias one engine; snapshot both before issuing either query. */
+static struct ls2k_sdio_desc handoff_query[SD_HOST_COUNT][2]
+    __attribute__((section(".sdio_dma"), aligned(64)));
+
+struct sd_handoff_snapshot
+{
+    uint32_t low[2], high[2];
+    uint32_t command, data, status;
+};
+
+static struct sd_handoff_snapshot handoff_snapshot[SD_HOST_COUNT];
+static unsigned int handoff_attempted;
+
+static int sd_handoff_query(unsigned int index, unsigned int direction)
+{
+    static const unsigned int orders[2] = {LSD_DMA_READ, LSD_DMA_WRITE};
+    rt_ubase_t address = sd_port_base(sd_port(index)) + orders[direction];
+    volatile struct ls2k_sdio_desc *query =
+        (void *)LS2K_UNCACHED(&handoff_query[index][direction]);
+    rt_ubase_t physical = LS2K_PHYSICAL(&handoff_query[index][direction]);
+    uint32_t start = rt_tick_get();
+    uint32_t state;
+
+    if ((physical & 63U) || physical >= LS2K0300_DMA_LIMIT - sizeof(*query))
     {
-        LOG_E("SDIO0 is strapped for 1.8 V; a 3.3 V SD card is required");
         return -RT_EINVAL;
     }
 
-    root = BSP_SDIO_ROOT_CLOCK_HZ;
+    rt_memset((void *)query, 0xff, sizeof(*query));
+    rt_hw_dmb();
+    HWREG32(address + 4) = 0;
+    HWREG32(address) = (uint32_t)physical | LSD_DMA_64BIT |
+                       LSD_DMA_UNCACHED | LSD_DMA_QUERY;
+    rt_hw_dmb();
+
+    while (HWREG32(address) & LSD_DMA_QUERY)
+    {
+        if ((uint32_t)(rt_tick_get() - start) >= rt_tick_from_millisecond(20))
+        {
+            LOG_E("SDIO%u inherited DMA query timeout", sd_port(index));
+            return -RT_ETIMEOUT;
+        }
+
+        rt_thread_mdelay(1);
+    }
+
+    rt_hw_dmb();
+    state = query->command;
+
+    /* Write state 5 is the QUERY's own writeback. It is acceptable only after
+     * QUERY has cleared and the sentinel really changed. DONE alone is stale
+     * during a later transaction; the read/write states must also be idle. */
+    if (state == UINT32_MAX || query->next == UINT32_MAX ||
+        !(state & LSD_DMA_DONE) || (query->next & 1U) || (state & 0xf0U) ||
+        ((state & 0xf00U) && (state & 0xf00U) != 0x500U))
+    {
+        LOG_E("SDIO%u inherited DMA not complete: state=%08x next=%08x",
+              sd_port(index), state, query->next);
+        return -RT_EBUSY;
+    }
+
+    return RT_EOK;
+}
+
+static int sd_shared_clock(uint32_t sample, uint32_t *input_clock)
+{
+    static const unsigned int orders[2] = {LSD_DMA_READ, LSD_DMA_WRITE};
+    rt_ubase_t scale_address = LS2K_UNCACHED(LS2K0300_CLOCK_SCALE);
+    uint32_t scale = HWREG32(scale_address);
+    uint32_t root = BSP_SDIO_ROOT_CLOCK_HZ;
+    uint32_t divider = (scale >> 24) & 15U;
+    uint32_t old_divider;
+    uint32_t domain_mask = 1U << 27;
+
+    if (handoff_attempted)
+    {
+        /* A late DMA write must never reach reused QUERY storage. Reboot is
+         * required after an attempted handoff, including a failed one. */
+        return -RT_EIO;
+    }
+
     if (!root)
     {
-        /* DEVICE PLL before peripheral scaling; reuse the validated decoder. */
-        root = ls2k0300_apb_clock(sample, HWREG32(LS2K_UNCACHED(LS2K0300_DDR_PLL0)),
-                                  HWREG32(LS2K_UNCACHED(LS2K0300_DDR_PLL1)), 1U << 19);
+        root = ls2k0300_apb_clock(sample,
+                    HWREG32(LS2K_UNCACHED(LS2K0300_DDR_PLL0)),
+                    HWREG32(LS2K_UNCACHED(LS2K0300_DDR_PLL1)), 1U << 19);
     }
 
     if (!root)
@@ -339,11 +529,9 @@ static int sd_platform_init(struct ls2k_sd_host *dev)
 
     old_divider = divider;
 
-    /* Both ports share this divider. Avoid the vendor driver's >400 kHz
-     * identification clock, but do not disturb an active second controller. */
     while (root / divider > 400000U * 255U && divider < 15)
     {
-        divider++;
+        ++divider;
     }
 
     if (root / divider > 400000U * 255U)
@@ -351,74 +539,228 @@ static int sd_platform_init(struct ls2k_sd_host *dev)
         return -RT_EINVAL;
     }
 
+    for (unsigned int index = 0; index < SD_HOST_COUNT; ++index)
+    {
+        domain_mask |= 1U << (13 + sd_port(index));
+    }
+
+#ifndef BSP_SDIO_DUAL_HOST
     if (divider != old_divider)
     {
-        rt_ubase_t other = LS2K_UNCACHED(0x16140000UL + (1U - port) * 0x8000UL);
+        /* The read-only check below also needs the other register interface. */
+        domain_mask |= 1U << (13 + 1U - BSP_SDIO_PORT);
+    }
+#endif
 
-        if (HWREG32(other + LSD_CON) & LSD_CLOCK)
+    /* Require a clocked, released firmware handoff before port MMIO. Manual
+     * 3.3.3 warns that hot module reset can deadlock the system. Do not reset
+     * a running domain or silently restart an unknown gated transaction. */
+    if (!(HWREG32(LS2K_UNCACHED(0x16000424UL)) & (1U << 4)) ||
+        (HWREG32(LS2K_UNCACHED(0x16000118UL)) & domain_mask) != domain_mask ||
+        (HWREG32(LS2K_UNCACHED(0x16000120UL)) & domain_mask) != domain_mask)
+    {
+        LOG_E("SDIO firmware clock/reset handoff is not ready");
+        return -RT_EBUSY;
+    }
+
+#ifndef BSP_SDIO_DUAL_HOST
+    if (divider != old_divider)
+    {
+        rt_ubase_t other = sd_port_base(1U - BSP_SDIO_PORT);
+
+        /* No QUERY, STOP, reset or write to the unowned port. Only the clean
+         * firmware contract (unused DMA and card clock off) allows a shared
+         * divider change. START clear with a programmed order is insufficient. */
+        if ((HWREG32(other + LSD_CON) & LSD_CLOCK) ||
+            HWREG32(other + LSD_DMA_READ) || HWREG32(other + LSD_DMA_READ + 4) ||
+            HWREG32(other + LSD_DMA_WRITE) || HWREG32(other + LSD_DMA_WRITE + 4) ||
+            (HWREG32(other + LSD_CMD) & LSD_CMD_START) ||
+            (HWREG32(other + LSD_DATA) & LSD_DATA_START) ||
+            (HWREG32(other + LSD_DATA_STATUS) & 3U))
         {
-            LOG_E("shared SDIO clock needs division; stop the other port first");
+            LOG_E("shared SDIO divider requires a clean unused other port");
             return -RT_EBUSY;
         }
     }
+#endif
 
-    HWREG32(LS2K_UNCACHED(LS2K0300_CLOCK_SCALE)) = (scale & ~(15U << 24)) | (divider << 24);
+    /* Capture every owned window before QUERY changes a mirrored order. */
+    for (unsigned int index = 0; index < SD_HOST_COUNT; ++index)
+    {
+        rt_ubase_t base = sd_port_base(sd_port(index));
+        struct sd_handoff_snapshot *snapshot = &handoff_snapshot[index];
+
+        snapshot->command = HWREG32(base + LSD_CMD);
+        snapshot->data = HWREG32(base + LSD_DATA);
+        snapshot->status = HWREG32(base + LSD_DATA_STATUS);
+
+        for (unsigned int direction = 0; direction < 2; ++direction)
+        {
+            snapshot->low[direction] = HWREG32(base + orders[direction]);
+            snapshot->high[direction] = HWREG32(base + orders[direction] + 4);
+        }
+    }
+
+    for (unsigned int index = 0; index < SD_HOST_COUNT; ++index)
+    {
+        const struct sd_handoff_snapshot *snapshot = &handoff_snapshot[index];
+
+        if ((snapshot->command & LSD_CMD_START) ||
+            (snapshot->data & LSD_DATA_START) || (snapshot->status & 3U))
+        {
+            LOG_E("SDIO%u has an active firmware card transfer", sd_port(index));
+            return -RT_EBUSY;
+        }
+
+        for (unsigned int direction = 0; direction < 2; ++direction)
+        {
+            uint32_t low = snapshot->low[direction];
+            uint32_t high = snapshot->high[direction];
+
+            if (low == UINT32_MAX || high == UINT32_MAX ||
+                (low & (LSD_DMA_START | LSD_DMA_QUERY | LSD_DMA_STOP)) ||
+                (low && !(low & ~31U) && !high) ||
+                (high && !(low & LSD_DMA_64BIT)))
+            {
+                LOG_E("SDIO%u has inconsistent firmware DMA order", sd_port(index));
+                return -RT_EBUSY;
+            }
+        }
+    }
+
+    handoff_attempted = 1;
+
+    for (unsigned int index = 0; index < SD_HOST_COUNT; ++index)
+    {
+        for (unsigned int direction = 0; direction < 2; ++direction)
+        {
+            const struct sd_handoff_snapshot *snapshot = &handoff_snapshot[index];
+            int result;
+
+            if (!snapshot->low[direction] && !snapshot->high[direction])
+            {
+                /* Board firmware contract: an all-zero order with idle card
+                 * state means an unused channel. It is NOT a general hardware
+                 * proof of no DMA; never QUERY such a never-started channel. */
+                continue;
+            }
+
+            result = sd_handoff_query(index, direction);
+
+            if (result)
+            {
+                return result;
+            }
+        }
+    }
+
+    for (unsigned int index = 0; index < SD_HOST_COUNT; ++index)
+    {
+        rt_ubase_t base = sd_port_base(sd_port(index));
+
+        HWREG32(base + LSD_IRQ_ENABLE) = 0;
+        HWREG32(base + LSD_CON) &= ~LSD_CLOCK;
+    }
+
+    rt_hw_dmb();
+
+    if (divider != old_divider)
+    {
+        HWREG32(scale_address) = (scale & ~(15U << 24)) | (divider << 24);
+        rt_hw_dmb();
+    }
+
+    uint32_t read_divider = (HWREG32(scale_address) >> 24) & 15U;
+
+    if ((read_divider ? read_divider : 1U) != divider)
+    {
+        return -RT_EIO;
+    }
+
+    *input_clock = root / divider;
+    return RT_EOK;
+}
+
+static int sd_platform_init(struct ls2k_sd_host *dev, uint32_t sample,
+                            uint32_t input_clock)
+{
+    unsigned int port = dev->port;
+    unsigned int strap_emmc = (sample >> (3 + port)) & 1U;
+    rt_ubase_t mux;
+    uint32_t mask;
+
+    if (!port && !dev->controller.emmc && (sample & (1U << 6)))
+    {
+        LOG_E("SDIO0 is strapped for 1.8 V; a 3.3 V SD card is required");
+        return -RT_EINVAL;
+    }
+
     HWREG32(LS2K_UNCACHED(0x16000424UL)) |= 1U << 4;
     HWREG32(LS2K_UNCACHED(0x16000118UL)) |= 1U << (13 + port);
     HWREG32(LS2K_UNCACHED(0x16000120UL)) |= 1U << (13 + port);
 
-    /* Only CLK/CMD/D0..D3; SDIO0 D4..D7 may still carry unrelated signals. */
     mux = LS2K_UNCACHED(port ? 0x160004a8UL : 0x160004a4UL);
     mask = port ? 0x000fff00U : 0xfff00000U;
     HWREG32(mux) = (HWREG32(mux) & ~mask) | mask;
-    rt_hw_dmb();
 
-    dev->base = LS2K_UNCACHED(0x16140000UL + port * 0x8000UL);
+    /* The native eMMC IP exposes eight data pins. A strap-selected SD IP
+     * switched to eMMC remains limited to four (manual tables 15-45/16-45). */
+    dev->max_width = dev->controller.emmc && strap_emmc ? 8 : 4;
+
+    if (dev->max_width == 8 && !port)
+    {
+        mux = LS2K_UNCACHED(0x160004a8UL);
+        HWREG32(mux) = (HWREG32(mux) & ~0xffU) | 0xffU;
+    }
+
+    dev->base = sd_port_base(port);
     dev->irq = port ? 32 : 31;
     dev->controller.base_address = LS2K_PHYSICAL(dev->base);
-    dev->controller.input_clock = root / divider;
-    /* BUS_SEL swaps the strap-selected SD/eMMC controller; DATA_MODE=0 SDR. */
-    HWREG32(dev->base + LSD_BUS_MODE) = (HWREG32(dev->base + LSD_BUS_MODE) & ~3U) |
-                                        (((sample >> (3 + port)) & 1U) << 1);
+    dev->controller.input_clock = input_clock;
+    /* BUS_SEL toggles the strap-selected IP; DATA_MODE stays SDR. */
+    HWREG32(dev->base + LSD_BUS_MODE) =
+        (HWREG32(dev->base + LSD_BUS_MODE) & ~3U) |
+        ((strap_emmc ^ !!dev->controller.emmc) << 1);
     rt_hw_dmb();
     return RT_EOK;
 }
 
-static int rt_hw_sdio_init(void)
+static int sd_host_init(unsigned int index, uint32_t sample, uint32_t input_clock)
 {
-    struct ls2k_sd_host *dev = &device;
+    struct ls2k_sd_host *dev = &devices[index];
     struct rt_mmcsd_host *host;
+    char name[RT_NAME_MAX];
     int result;
 
-    if (LS2K_PHYSICAL(&storage) + sizeof(storage) > LS2K0300_DMA_LIMIT)
-    {
-        return -RT_EINVAL;
-    }
+    dev->port = sd_port(index);
+    dev->controller.emmc = sd_is_emmc(dev->port);
+    result = sd_platform_init(dev, sample, input_clock);
 
-    result = sd_platform_init(dev);
     if (result)
     {
-        LOG_E("platform initialization failed (%d)", result);
         return result;
     }
 
     rt_spin_lock_init(&dev->lock);
-    rt_sem_init(&dev->event, "sd_irq", 0, RT_IPC_FLAG_PRIO);
+    rt_snprintf(name, sizeof(name), "sd%u_irq", dev->port);
+    rt_sem_init(&dev->event, name, 0, RT_IPC_FLAG_PRIO);
     dev->controller.io = &sd_io;
     dev->controller.context = dev;
-    dev->controller.dma = (void *)LS2K_UNCACHED(&storage);
-    dev->controller.dma_address = LS2K_PHYSICAL(&storage);
+    dev->controller.dma = (void *)LS2K_UNCACHED(&storage[index]);
+    dev->controller.dma_address = LS2K_PHYSICAL(&storage[index]);
     dev->controller.width = 1;
 
-    /* Reset the controller before touching storage that firmware might use. */
+    /* The shared handoff already verified inherited DMA completion. Do not
+     * QUERY our controller again before its first submitted descriptor. */
     if (ls2k_sdio_reset(&dev->controller))
     {
         rt_sem_detach(&dev->event);
         return -RT_EIO;
     }
 
-    rt_memset(dev->controller.dma, 0, sizeof(storage));
+    rt_memset(dev->controller.dma, 0, sizeof(storage[index]));
     host = mmcsd_alloc_host();
+
     if (!host)
     {
         rt_sem_detach(&dev->event);
@@ -426,14 +768,25 @@ static int rt_hw_sdio_init(void)
     }
 
     dev->host = host;
+    rt_snprintf(host->name, sizeof(host->name), "mmc%u", dev->port);
     host->private_data = dev;
     host->ops = &sd_ops;
-    host->freq_min = (dev->controller.input_clock + 254) / 255;
-    host->freq_max = BSP_SDIO_MAX_CLOCK_HZ < dev->controller.input_clock
-                         ? BSP_SDIO_MAX_CLOCK_HZ
-                         : dev->controller.input_clock;
+    host->freq_min = (input_clock + 254) / 255;
+    host->freq_max = BSP_SDIO_MAX_CLOCK_HZ < input_clock
+                         ? BSP_SDIO_MAX_CLOCK_HZ : input_clock;
     host->valid_ocr = VDD_32_33 | VDD_33_34;
     host->flags = MMCSD_BUSWIDTH_4 | MMCSD_MUTBLKWRITE;
+
+    if (dev->controller.emmc)
+    {
+        host->flags |= MMCSD_SUP_NONREMOVABLE | MMCSD_SUP_HIGHSPEED;
+
+        if (dev->max_width == 8)
+        {
+            host->flags |= MMCSD_BUSWIDTH_8;
+        }
+    }
+
     host->max_seg_size = LSD_BUFFER_SIZE;
     host->max_dma_segs = 1;
     host->max_blk_size = 512;
@@ -442,10 +795,49 @@ static int rt_hw_sdio_init(void)
     rt_hw_interrupt_mask(dev->irq);
     rt_hw_interrupt_install(dev->irq, sd_interrupt, dev, "sdio");
     rt_hw_interrupt_umask(dev->irq);
-    LOG_I("SDIO%u at 0x%x irq=%d input=%u Hz, 3.3 V SDR <=%u Hz", BSP_SDIO_PORT,
-          dev->controller.base_address, dev->irq, dev->controller.input_clock, host->freq_max);
+    LOG_I("SDIO%u %s at 0x%x irq=%d input=%u Hz, SDR <=%u Hz", dev->port,
+          dev->controller.emmc ? "eMMC" : "SD", dev->controller.base_address,
+          dev->irq, input_clock, host->freq_max);
     mmcsd_change(host);
     return RT_EOK;
+}
+
+static int rt_hw_sdio_init(void)
+{
+    uint32_t sample = HWREG32(LS2K_UNCACHED(LS2K0300_CLOCK_SAMPLE));
+    uint32_t input_clock;
+    int result;
+    int first_error = RT_EOK;
+
+    if (LS2K_PHYSICAL(&storage) + sizeof(storage) > LS2K0300_DMA_LIMIT)
+    {
+        return -RT_EINVAL;
+    }
+
+    result = sd_shared_clock(sample, &input_clock);
+
+    if (result)
+    {
+        LOG_E("shared platform initialization failed (%d)", result);
+        return result;
+    }
+
+    for (unsigned int index = 0; index < SD_HOST_COUNT; ++index)
+    {
+        result = sd_host_init(index, sample, input_clock);
+
+        if (result)
+        {
+            LOG_E("SDIO%u initialization failed (%d)", sd_port(index), result);
+
+            if (!first_error)
+            {
+                first_error = result;
+            }
+        }
+    }
+
+    return first_error;
 }
 
 INIT_DEVICE_EXPORT(rt_hw_sdio_init);
@@ -453,25 +845,29 @@ INIT_DEVICE_EXPORT(rt_hw_sdio_init);
 #ifdef RT_USING_FINSH
 static void sdio_status(void)
 {
-    struct ls2k_sd_host *dev = &device;
-    rt_uint32_t interrupts;
-    rt_base_t level;
-
-    if (!dev->host)
+    for (unsigned int index = 0; index < SD_HOST_COUNT; ++index)
     {
-        rt_kprintf("SDIO host not initialized\n");
-        return;
-    }
+        struct ls2k_sd_host *dev = &devices[index];
+        rt_uint32_t interrupts;
+        rt_base_t level;
 
-    mmcsd_host_lock(dev->host);
-    level = rt_spin_lock_irqsave(&dev->lock);
-    interrupts = dev->interrupts;
-    rt_spin_unlock_irqrestore(&dev->lock, level);
-    rt_kprintf("SDIO%u card=%s clock=%u width=%u requests=%u errors=%u irq=%u fault=%d\n",
-               BSP_SDIO_PORT, dev->host->card ? "present" : "absent", dev->controller.clock,
-               dev->controller.width, dev->requests, dev->errors, interrupts,
-               dev->controller.fault);
-    mmcsd_host_unlock(dev->host);
+        if (!dev->host)
+        {
+            rt_kprintf("SDIO%u host not initialized\n", sd_port(index));
+            continue;
+        }
+
+        mmcsd_host_lock(dev->host);
+        level = rt_spin_lock_irqsave(&dev->lock);
+        interrupts = dev->interrupts;
+        rt_spin_unlock_irqrestore(&dev->lock, level);
+        rt_kprintf("SDIO%u %s card=%s clock=%u width=%u requests=%u errors=%u irq=%u fault=%d\n",
+                   dev->port, dev->controller.emmc ? "eMMC" : "SD",
+                   dev->host->card ? "present" : "absent", dev->controller.clock,
+                   dev->controller.width, dev->requests, dev->errors, interrupts,
+                   dev->controller.fault);
+        mmcsd_host_unlock(dev->host);
+    }
 }
 
 MSH_CMD_EXPORT(sdio_status, Show SDIO controller and request status);

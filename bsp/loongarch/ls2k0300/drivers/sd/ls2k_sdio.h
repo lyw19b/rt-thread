@@ -35,6 +35,7 @@
 #define LSD_TIMER       0x24
 #define LSD_BLOCK_SIZE  0x28
 #define LSD_DATA        0x2c
+#define LSD_DATA_STATUS 0x34
 #define LSD_FIFO_STATUS 0x38
 #define LSD_STATUS      0x3c
 #define LSD_FIFO        0x40
@@ -53,6 +54,7 @@
 #define LSD_DATA_START    (1U << 14)
 #define LSD_DATA_DMA      (1U << 15)
 #define LSD_DATA_WIDE     (1U << 16)
+#define LSD_DATA_WIDE8    (1U << 26)
 #define LSD_FIFO_TX_FULL  (1U << 11)
 
 #define LSD_DATA_DONE     (1U << 0)
@@ -124,10 +126,12 @@ struct ls2k_sdio
     uint32_t dma_address, base_address, input_clock, clock;
     unsigned int width;
     int fault;
+    int emmc;
 };
 
 int ls2k_sdio_reset(struct ls2k_sdio *sd);
 int ls2k_sdio_clock(struct ls2k_sdio *sd, uint32_t requested);
+int ls2k_sdio_wait_ready(struct ls2k_sdio *sd, uint16_t rca, unsigned int timeout_ms);
 int ls2k_sdio_transfer(struct ls2k_sdio *sd, struct ls2k_sdio_command *cmd);
 
 #endif

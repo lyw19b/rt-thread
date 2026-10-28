@@ -7,12 +7,14 @@
  * 2026-10-26     LoongsonLab               share EHCI through board resources
  *
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ * 2026-10-28     LoongsonLab               apply board-specific USB power wiring
  */
 
 /*
  * Description:
  *   Keep the host PHY awake when EHCI takes ownership from firmware. Disable
- *   OHCI DMA schedules and preserve PHY tuning, OTG and reference clocks.
+ *   OHCI DMA schedules, preserve PHY tuning and reference clocks, and apply
+ *   the selected board's external USB power wiring.
  */
 
 #include <rtthread.h>
@@ -21,6 +23,11 @@
 #include "ls2k_usb_platform.h"
 
 #ifdef BSP_USING_USB_HOST
+rt_weak rt_err_t ls2k_usb_board_power_on(void)
+{
+    return RT_EOK;
+}
+
 rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardware_ports)
 {
     rt_ubase_t companion = LOONGARCH_PHYS_UNCACHED(0x16088000UL);
@@ -28,6 +35,7 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
     const rt_uint32_t host_override = (1U << 28) | (1U << 30);
     rt_uint32_t control;
     rt_uint32_t phy_control;
+    rt_err_t error;
 
     if ((HWREG32(LOONGARCH_PHYS_UNCACHED(0x16000114UL)) & 0x180) != 0x180 ||
         (HWREG32(LOONGARCH_PHYS_UNCACHED(0x1600011cUL)) & 0x180) != 0x180)
@@ -74,6 +82,14 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
     rt_thread_mdelay(20);
     rt_kprintf("USB host PHY: %08x -> %08x, software awake\n",
                phy_control, HWREG32(phy));
+
+    error = ls2k_usb_board_power_on();
+
+    if (error != RT_EOK)
+    {
+        return error;
+    }
+
     *base = LOONGARCH_PHYS_UNCACHED(0x16080000UL);
     *irq = 46;
     *hardware_ports = 1;

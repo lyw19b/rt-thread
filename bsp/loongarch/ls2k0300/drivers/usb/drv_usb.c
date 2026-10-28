@@ -9,14 +9,15 @@
  * 2026-10-25     LoongsonLab               add bounded high-address USB host support
  *
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ * 2026-10-28     LoongsonLab               snapshot diagnostics outside stream locks
  */
 
 /*
  * Description:
  *   LS2K0300 EHCI adapter for CherryUSB with high-speed hub/MSC transport.
  * Notes:
- *   Firmware supplies VBUS and PHY reference-clock configuration. OHCI and
- *   OTG are not initialized. A mutex serializes all schedule modifications;
+ *   Firmware supplies PHY reference clocks; board adapters handle VBUS wiring.
+ *   Only EHCI runs transfers. A mutex serializes all schedule modifications;
  *   the IRQ only wakes the poll thread. No caller buffer is exposed to DMA.
  */
 
@@ -551,25 +552,121 @@ void USBH_IRQHandler(uint8_t busid)
 
 static void usb_status(void)
 {
+    uint32_t ports[16], command = 0, status = 0;
+    uint32_t request_count, error_count, dma_address;
+    unsigned int port_count;
+    bool ready, quarantined;
+#ifdef BSP_USING_USB_CAMERA
+    uint32_t iso_running, queued, dropped, missed, iso_errors, late, max_gap, empty;
+    uint32_t read_gap, max_queued;
+#endif
+
     rt_mutex_take(&host_lock, RT_WAITING_FOREVER);
-    rt_kprintf("EHCI ready=%d quarantine=%d dma=0x%08x requests=%u errors=%u\n", controller.ready,
-               controller.quarantined, controller.dma_address, requests, errors);
+    ready = controller.ready;
+    quarantined = controller.quarantined;
+    dma_address = controller.dma_address;
+    request_count = requests;
+    error_count = errors;
+    port_count = operational ? hardware_ports : 0;
+
+    if (port_count > 16)
+    {
+        port_count = 16;
+    }
+
     if (operational)
     {
-        rt_kprintf("cmd=%08x sts=%08x port=%08x (HS host; OHCI/OTG disabled)\n",
-                   usb_read(NULL, LUSB_CMD), usb_read(NULL, LUSB_STS), usb_read(NULL, LUSB_PORT));
+        command = usb_read(NULL, LUSB_CMD);
+        status = usb_read(NULL, LUSB_STS);
 
-        for (unsigned int port = 1; port < hardware_ports; port++)
+        for (unsigned int port = 0; port < port_count; ++port)
         {
-            rt_kprintf("hardware port %u: %08x (not exposed)\n", port + 1,
-                       usb_read(NULL, LUSB_PORT + port * 4));
+            ports[port] = usb_read(NULL, LUSB_PORT + port * 4);
         }
     }
 
+#ifdef BSP_USING_USB_CAMERA
+    iso_running = camera_iso.running;
+    queued = camera_iso.count;
+    dropped = camera_iso.dropped;
+    missed = camera_iso.missed_transactions;
+    iso_errors = camera_iso.transaction_errors;
+    late = camera_iso.late_reschedules;
+    max_gap = camera_iso.max_poll_gap;
+    empty = camera_iso.empty_transactions;
+    read_gap = camera_iso.max_read_gap;
+    max_queued = camera_iso.max_queued;
+#endif
     rt_mutex_release(&host_lock);
+
+    /* Serial output may exceed the ISO queue window. Print only snapshots. */
+    rt_kprintf("EHCI ready=%d quarantine=%d dma=0x%08x requests=%u errors=%u\n",
+               ready, quarantined, dma_address, request_count, error_count);
+
+    if (port_count)
+    {
+        rt_kprintf("cmd=%08x sts=%08x port=%08x (HS host; OHCI/OTG disabled)\n",
+                   command, status, ports[0]);
+
+        for (unsigned int port = 1; port < port_count; ++port)
+        {
+            rt_kprintf("hardware port %u: %08x (not exposed)\n", port + 1, ports[port]);
+        }
+    }
+
+#ifdef BSP_USING_USB_CAMERA
+    rt_kprintf("EHCI ISO: running=%u queued=%u dropped=%u missed=%u errors=%u late=%u max_gap_ms=%u empty=%u\n",
+               iso_running, queued, dropped, missed, iso_errors, late, max_gap, empty);
+    rt_kprintf("EHCI consumer: max_gap_ms=%u max_queued=%u capacity=%u\n",
+               read_gap, max_queued, LUSB_ISO_QUEUE);
+#endif
 }
 
 MSH_CMD_EXPORT(usb_status, show LS2K USB host state);
+
+static void usb_hub_status(void)
+{
+    struct usbh_hub *hub = usbh_find_class_instance("/dev/hub2");
+    struct usb_setup_packet setup = {0};
+    uint8_t data[4];
+
+    if (!hub || !hub->connected || !hub->parent || !hub->intin)
+    {
+        rt_kprintf("USB external hub is not connected\n");
+        return;
+    }
+
+    rt_kprintf("USB hub: address=%u ports=%u interval=%u pending=%d error=%d actual=%u\n",
+               hub->hub_addr, hub->nports, hub->intin->bInterval,
+               hub->intin_urb.hcpriv != NULL, hub->intin_urb.errorcode,
+               (unsigned int)hub->intin_urb.actual_length);
+
+    /* Own the setup/buffer storage; usbh_control_transfer serializes EP0.
+     * GET_STATUS does not clear change bits or reset downstream devices. */
+    setup.bmRequestType = USB_REQUEST_DIR_IN | USB_REQUEST_CLASS | USB_REQUEST_RECIPIENT_OTHER;
+    setup.bRequest = HUB_REQUEST_GET_STATUS;
+    setup.wLength = sizeof(data);
+
+    for (unsigned int port = 1; port <= hub->nports; ++port)
+    {
+        int result;
+
+        setup.wIndex = port;
+        result = usbh_control_transfer(hub->parent, &setup, data);
+
+        if (result != sizeof(data))
+        {
+            rt_kprintf("USB hub port %u: GET_STATUS failed (%d)\n", port, result);
+            continue;
+        }
+
+        rt_kprintf("USB hub port %u: status=%04x change=%04x enumerated=%u\n",
+                   port, data[0] | data[1] << 8, data[2] | data[3] << 8,
+                   (unsigned int)hub->child[port - 1].connected);
+    }
+}
+
+MSH_CMD_EXPORT(usb_hub_status, Read external hub port status without clearing changes);
 
 static long usb_list(int argc, char **argv)
 {

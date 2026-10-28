@@ -42,6 +42,7 @@ INIT_DEVICE_EXPORT(accelerator_init);
 #include <ls2k0300_display.h>
 
 #ifdef BSP_USING_VANGUARD_TOUCH
+int ls2k0300_vanguard_panel_init(void);
 int ls2k0300_vanguard_touch_init(void);
 #endif
 #ifdef BSP_USING_HUMMINGBIRD
@@ -52,6 +53,8 @@ static int panel_init(void)
 {
 #ifdef BSP_USING_HUMMINGBIRD
     return ls2k0300_hummingbird_panel_init();
+#elif defined(BSP_USING_VANGUARD_TOUCH) && !defined(BSP_USING_LS2K0300_QEMU)
+    return ls2k0300_vanguard_panel_init();
 #else
     int error = ls2k0300_lcd_register((void *)LS2K_UNCACHED(0x16090000UL), 51);
 

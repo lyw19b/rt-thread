@@ -1,0 +1,21 @@
+# Copyright (C) 2020-2026 Loongson Technology Corporation Limited
+# SPDX-License-Identifier: Apache-2.0
+#
+# Change Logs:
+# Date           Author                    Notes
+# 2026-10-28     LoongsonLab               isolate Vanguard board adapters
+
+# Description:
+#   Compile only the selected vanguard board adapters.
+
+from building import *
+
+cwd = GetCurrentDir()
+group = []
+
+if GetDepend('BSP_USING_VANGUARD') or GetDepend('BSP_USING_VANGUARD_TOUCH'):
+    group = DefineGroup('LS2K0300 vanguard', Glob('*.c'), depend=[],
+                        CPPPATH=[cwd],
+                        LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+
+Return('group')

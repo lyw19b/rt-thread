@@ -8,6 +8,7 @@
  * 2026-10-24     LoongsonLab               implement bounded SDIO DMA requests
  *
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ * 2026-10-28     LoongsonLab               decode SD CMD6 by active bus width
  */
 
 /*
@@ -122,7 +123,7 @@ static int dma_state(struct ls2k_sdio *sd, unsigned int reg, uint32_t *state)
 
     sd->io->barrier(sd->context);
     *state = sd->dma->query.command;
-    return LSD_OK;
+    return *state == UINT32_MAX ? LSD_IO : LSD_OK;
 }
 
 static int dma_finish(struct ls2k_sdio *sd, unsigned int reg, int stop)
@@ -143,7 +144,10 @@ static int dma_finish(struct ls2k_sdio *sd, unsigned int reg, int stop)
             return LSD_TIMEOUT;
         }
 
-        if ((state & LSD_DMA_DONE) || (stop && !(state & LSD_DMA_STATES)))
+        /* DONE may remain set while a new DMA is busy. QUERY itself can
+         * report write state 5 after the original read state became idle. */
+        if ((stop || (state & LSD_DMA_DONE)) && !(state & 0xf0U) &&
+            (!(state & 0xf00U) || (state & 0xf00U) == 0x500U))
         {
             return LSD_OK;
         }
@@ -193,7 +197,7 @@ int ls2k_sdio_transfer(struct ls2k_sdio *sd, struct ls2k_sdio_command *cmd)
     }
 
     if (cmd->index > 63 || !cmd->timeout_ms || cmd->timeout_ms > 10000 || !sd->clock ||
-        (sd->width != 1 && sd->width != 4))
+        (sd->width != 1 && sd->width != 4 && !(sd->emmc && sd->width == 8)))
     {
         return LSD_INVALID;
     }
@@ -266,7 +270,8 @@ int ls2k_sdio_transfer(struct ls2k_sdio *sd, struct ls2k_sdio_command *cmd)
 
         write_reg(sd, LSD_DATA,
                   cmd->blocks | LSD_DATA_START | LSD_DATA_DMA |
-                      (sd->width == 4 ? LSD_DATA_WIDE : 0));
+                      (sd->width == 4 ? LSD_DATA_WIDE : 0) |
+                      (sd->width == 8 ? LSD_DATA_WIDE8 : 0));
 
         if (cmd->write)
         {
@@ -275,7 +280,7 @@ int ls2k_sdio_transfer(struct ls2k_sdio *sd, struct ls2k_sdio_command *cmd)
 
         dma_started = 1;
         required |= LSD_DATA_DONE;
-        if (cmd->index == 6)
+        if (!sd->emmc && cmd->index == 6)
         {
             command |= LSD_CMD6_DATA;
         }
@@ -363,12 +368,24 @@ out:
     else if (bytes && !cmd->write)
     {
         sd->io->barrier(sd->context);
-        if (cmd->index == 6)
+        if (!sd->emmc && cmd->index == 6)
         {
-            /* SDIO 1.2 CMD6 payload has reversed bits in each byte. */
+            /* The CMD6 special path reverses sample order inside each byte.
+             * Samples are bits on a 1-bit bus, nibbles on a 4-bit bus. Linux
+             * switches speed before widening its bus; RT switches after it.
+             * Keep CMD6_DATA: without it Vanguard's CMD6 DMA does not finish. */
             for (size_t index = 0; index < bytes; index++)
             {
-                sd->dma->buffer[index] = reverse_byte(sd->dma->buffer[index]);
+                uint8_t byte = sd->dma->buffer[index];
+
+                if (sd->width == 4)
+                {
+                    sd->dma->buffer[index] = (uint8_t)((byte << 4) | (byte >> 4));
+                }
+                else
+                {
+                    sd->dma->buffer[index] = reverse_byte(byte);
+                }
             }
         }
 
@@ -379,4 +396,55 @@ out:
     write_reg(sd, LSD_DATA, 0);
     write_reg(sd, LSD_STATUS, LSD_ALL_STATUS);
     return result;
+}
+
+int ls2k_sdio_wait_ready(struct ls2k_sdio *sd, uint16_t rca,
+                          unsigned int timeout_ms)
+{
+    uint32_t start = sd->io->time_ms(sd->context);
+
+    if (!rca || !timeout_ms || timeout_ms > 10000)
+    {
+        return LSD_INVALID;
+    }
+
+    for (;;)
+    {
+        uint32_t elapsed = sd->io->time_ms(sd->context) - start;
+        struct ls2k_sdio_command status = {0};
+        int result;
+
+        if (elapsed >= timeout_ms)
+        {
+            return LSD_TIMEOUT;
+        }
+
+        status.index = 13;
+        status.argument = (uint32_t)rca << 16;
+        status.response_present = 1;
+        status.response_crc = 1;
+        status.timeout_ms = timeout_ms - elapsed;
+        result = ls2k_sdio_transfer(sd, &status);
+
+        if (result)
+        {
+            return result;
+        }
+
+        /* R1 errors are above the CURRENT_STATE/READY_FOR_DATA fields. */
+        if (status.response[0] & 0xffffe000U)
+        {
+            return LSD_IO;
+        }
+
+        /* A read STOP can finish without a DAT0 busy edge. Require both
+         * READY_FOR_DATA and TRAN, rather than accepting response completion. */
+        if ((status.response[0] & (1U << 8)) &&
+            ((status.response[0] >> 9) & 15U) == 4)
+        {
+            return LSD_OK;
+        }
+
+        sd->io->wait_ms(sd->context, 1);
+    }
 }

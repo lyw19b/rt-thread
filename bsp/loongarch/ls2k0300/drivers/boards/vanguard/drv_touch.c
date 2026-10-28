@@ -7,6 +7,7 @@
  * Date           Author                    Notes
  * 2026-10-26     LoongsonLab               adapt Vanguard Pi I2C0 touch wiring
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ * 2026-10-28     LoongsonLab               release an interrupted touch I2C transaction
  */
 
 /*
@@ -31,8 +32,12 @@
 #define TOUCH_INT_PIN     42
 #define TOUCH_RESET_PIN   55
 #define TOUCH_BANK_IRQ    55
+#define TOUCH_SCL_PIN     48
+#define TOUCH_SDA_PIN     49
+#define TOUCH_I2C_BASE    0x16108000UL
 #define GPIO_DIR          0x800
 #define GPIO_OUT          0x900
+#define GPIO_IN           0xa00
 #define GPIO_IRQ_ENABLE   0xb00
 #define GPIO_IRQ_POLARITY 0xc00
 #define GPIO_IRQ_EDGE     0xd00
@@ -117,12 +122,115 @@ static void touch_reset(void)
     gpio_write(GPIO_IRQ_CLEAR, TOUCH_INT_PIN, 1);
 }
 
+static rt_bool_t gpio_is_high(unsigned int pin)
+{
+    return (HWREG8(LS2K_UNCACHED(TOUCH_GPIO_BASE + GPIO_IN + pin)) & 1) != 0;
+}
+
+static int touch_wait_scl(void)
+{
+    for (unsigned int attempt = 0; attempt < 10; ++attempt)
+    {
+        if (gpio_is_high(TOUCH_SCL_PIN))
+        {
+            return RT_EOK;
+        }
+
+        rt_thread_mdelay(1);
+    }
+
+    return -RT_ETIMEOUT;
+}
+
+/* A warm reset can interrupt an I2C read with the panel still holding SDA low.
+ * Resetting only the host does not clock that byte out. At board takeover,
+ * emulate open-drain GPIO: drive low or release to input, never drive high.
+ * Nine bounded clocks and STOP recover a slave waiting for its last ACK.
+ * This runs before bus registration, with no live I2C clients. */
+static int touch_release_bus(void)
+{
+    rt_ubase_t mux = LS2K_UNCACHED(TOUCH_PINMUX_BASE + 0xc);
+    rt_ubase_t gpio = LS2K_UNCACHED(TOUCH_GPIO_BASE);
+    rt_uint32_t saved_mux = HWREG32(mux);
+    rt_uint8_t scl_dir = HWREG8(gpio + GPIO_DIR + TOUCH_SCL_PIN);
+    rt_uint8_t sda_dir = HWREG8(gpio + GPIO_DIR + TOUCH_SDA_PIN);
+    rt_uint8_t scl_out = HWREG8(gpio + GPIO_OUT + TOUCH_SCL_PIN);
+    rt_uint8_t sda_out = HWREG8(gpio + GPIO_OUT + TOUCH_SDA_PIN);
+    unsigned int clocks = 0;
+    int error;
+
+    HWREG32(LS2K_UNCACHED(TOUCH_I2C_BASE)) = 0;
+    rt_hw_dmb();
+    gpio_write(GPIO_DIR, TOUCH_SCL_PIN, 1);
+    gpio_write(GPIO_DIR, TOUCH_SDA_PIN, 1);
+    gpio_write(GPIO_OUT, TOUCH_SCL_PIN, 0);
+    gpio_write(GPIO_OUT, TOUCH_SDA_PIN, 0);
+    HWREG32(mux) = saved_mux & ~15U;
+    rt_hw_dmb();
+    rt_thread_mdelay(1);
+
+    error = touch_wait_scl();
+
+    while (!error && !gpio_is_high(TOUCH_SDA_PIN) && clocks < 9)
+    {
+        gpio_write(GPIO_DIR, TOUCH_SCL_PIN, 0);
+        rt_thread_mdelay(1);
+        gpio_write(GPIO_DIR, TOUCH_SCL_PIN, 1);
+        rt_thread_mdelay(1);
+        error = touch_wait_scl();
+        ++clocks;
+    }
+
+    if (!error && clocks)
+    {
+        gpio_write(GPIO_DIR, TOUCH_SCL_PIN, 0);
+        gpio_write(GPIO_DIR, TOUCH_SDA_PIN, 0);
+        rt_thread_mdelay(1);
+        gpio_write(GPIO_DIR, TOUCH_SCL_PIN, 1);
+        rt_thread_mdelay(1);
+        error = touch_wait_scl();
+        gpio_write(GPIO_DIR, TOUCH_SDA_PIN, 1);
+        rt_thread_mdelay(1);
+    }
+
+    if (!error && !gpio_is_high(TOUCH_SDA_PIN))
+    {
+        error = -RT_EIO;
+    }
+
+    /* Restore pin ownership even if a line is externally held low. */
+    HWREG32(mux) = saved_mux;
+    rt_hw_dmb();
+    gpio_write(GPIO_OUT, TOUCH_SCL_PIN, scl_out);
+    gpio_write(GPIO_OUT, TOUCH_SDA_PIN, sda_out);
+    gpio_write(GPIO_DIR, TOUCH_SCL_PIN, scl_dir);
+    gpio_write(GPIO_DIR, TOUCH_SDA_PIN, sda_dir);
+
+    if (error)
+    {
+        rt_kprintf("Vanguard touch: I2C0 bus release failed (%d)\n", error);
+    }
+    else if (clocks)
+    {
+        rt_kprintf("Vanguard touch: I2C0 recovered after %u clocks and STOP\n", clocks);
+    }
+
+    return error;
+}
+
 int ls2k0300_vanguard_touch_init(void)
 {
     int error;
 
     touch_reset();
-    error = ls2k0300_i2c_register((void *)LS2K_UNCACHED(0x16108000UL), 200000000, "i2c0");
+    error = touch_release_bus();
+
+    if (!error)
+    {
+        error = ls2k0300_i2c_register((void *)LS2K_UNCACHED(TOUCH_I2C_BASE),
+                                     200000000, "i2c0");
+    }
+
     if (!error)
     {
         /* The GPIO edge latch drives a level-high parent interrupt. */

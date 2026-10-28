@@ -8,6 +8,7 @@
  * 2026-10-26     LoongsonLab               add board-owned USB camera support
  *
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ * 2026-10-28     LoongsonLab               separate ISO and standalone Hub frame lists
  */
 
 /* Description: One persistent high-speed IN stream with permanent bounce DMA. */
@@ -19,7 +20,9 @@
 
 #define LUSB_ISO_SLOTS  32U
 #define LUSB_ISO_PACKET 3072U
-#define LUSB_ISO_QUEUE  128U
+/* Buffer one complete hardware window. Vanguard network/Hub activity can
+ * delay the consumer by 17 ms while the HCD continues polling each ms. */
+#define LUSB_ISO_QUEUE  (LUSB_ISO_SLOTS * 8U)
 
 struct ls2k_itd
 {
@@ -31,6 +34,8 @@ struct ls2k_iso_dma
 {
     struct ls2k_itd itd[LUSB_ISO_SLOTS];
     uint8_t data[LUSB_ISO_SLOTS][8 * LUSB_ISO_PACKET] __attribute__((aligned(4096)));
+    /* Keep standalone Hub polling from fetching the future ISO frame list. */
+    uint32_t frames[1024] __attribute__((aligned(4096)));
 } __attribute__((aligned(4096)));
 
 struct ls2k_iso_packet
@@ -44,6 +49,9 @@ struct ls2k_iso
 {
     struct ls2k_iso_dma *dma;
     uint32_t physical, last_poll, dropped;
+    uint32_t missed_transactions, transaction_errors, late_reschedules, max_poll_gap;
+    uint32_t empty_transactions;
+    uint32_t last_read, max_read_gap, max_queued;
     uint16_t frame[LUSB_ISO_SLOTS], next_frame;
     uint16_t packet, capacity, interval;
     uint8_t address, endpoint, cursor;

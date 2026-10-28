@@ -8,6 +8,8 @@
  * 2026-10-26     LoongsonLab               add board-owned USB camera support
  *
  * 2026-10-27     LoongsonLab               adapt reference BSP to project APIs
+ * 2026-10-28     LoongsonLab               keep empty completions out of payload queue
+ * 2026-10-28     LoongsonLab               publish independent ISO schedules before enable
  */
 
 /*
@@ -24,6 +26,13 @@
 #include <string.h>
 
 _Static_assert(sizeof(struct ls2k_itd) == 96, "extended iTD stride");
+_Static_assert(sizeof(((struct ls2k_iso_dma *)0)->frames) == 4096, "ISO frame-list size");
+_Static_assert(offsetof(struct ls2k_iso_dma, frames) % 4096 == 0, "ISO frame-list alignment");
+
+/* A start succeeds only with at least half a millisecond left before its
+ * first scheduled microframe. This is a driver contract, not an inference
+ * about the controller's undocumented internal buffering. */
+#define LUSB_ISO_START_MARGIN_UFRAMES 4U
 
 static uint16_t current_frame(struct ls2k_ehci *hc)
 {
@@ -62,7 +71,7 @@ static void schedule(struct ls2k_ehci *hc, unsigned index, uint16_t frame)
 
     s->frame[index] = frame;
     hc->io->barrier(hc->ctx);
-    hc->dma->frames[frame & 1023] = s->physical + index * sizeof(*d);
+    s->dma->frames[frame & 1023] = s->physical + index * sizeof(*d);
     hc->io->barrier(hc->ctx);
 }
 
@@ -78,9 +87,9 @@ void ls2k_iso_tail(struct ls2k_ehci *hc, uint32_t link, uint32_t interval, uint3
     for (unsigned i = 0; i < 1024; ++i)
     {
         /* Preserve every live iTD head while changing its following QH. */
-        if (hc->dma->frames[i] & 1 || (hc->dma->frames[i] & 6) == 2)
+        if (s->dma->frames[i] & 1 || (s->dma->frames[i] & 6) == 2)
         {
-            hc->dma->frames[i] = tail(s, i);
+            s->dma->frames[i] = tail(s, i);
         }
     }
 
@@ -96,6 +105,7 @@ int ls2k_iso_start(struct ls2k_ehci *hc, struct ls2k_iso *s, uint64_t physical, 
                    uint8_t endpoint, uint16_t packet, uint8_t interval)
 {
     uint16_t frame;
+    uint32_t start, prepared_at;
 
     if (!hc->ready || hc->quarantined || !s || !s->dma || hc->iso || !address || address > 127 ||
         !endpoint || endpoint > 15 || !(packet & 0x7ff) || (packet & 0x7ff) > 1024 ||
@@ -105,6 +115,15 @@ int ls2k_iso_start(struct ls2k_ehci *hc, struct ls2k_iso *s, uint64_t physical, 
         return -USB_ERR_INVAL;
     }
 
+    /* The caller holds the HCD lock. Do not replace a periodic table still
+     * owned by an interrupt transfer or a previous unconfirmed shutdown. */
+    if ((hc->io->read(hc->ctx, LUSB_CMD) & LUSB_PSE) ||
+        (hc->io->read(hc->ctx, LUSB_STS) & LUSB_PSS))
+    {
+        return -USB_ERR_BUSY;
+    }
+
+    s->running = false;
     s->physical = physical;
     s->packet = packet;
     s->capacity = (packet & 0x7ff) * (1 + ((packet >> 11) & 3));
@@ -115,15 +134,28 @@ int ls2k_iso_start(struct ls2k_ehci *hc, struct ls2k_iso *s, uint64_t physical, 
     s->head = 0;
     s->count = 0;
     s->dropped = 0;
+    s->missed_transactions = 0;
+    s->transaction_errors = 0;
+    s->late_reschedules = 0;
+    s->max_poll_gap = 0;
+    s->empty_transactions = 0;
     s->lost = false;
     s->tail_interval = 0;
-    s->last_poll = hc->io->time_ms(hc->ctx);
+    s->max_read_gap = 0;
+    s->max_queued = 0;
     hc->iso = s;
     for (unsigned i = 0; i < 1024; ++i)
     {
-        hc->dma->frames[i] = 1;
+        s->dma->frames[i] = 1;
     }
 
+    /* On LS2K0300, both reusing the standalone Hub table and publishing
+     * links after enabling an empty table skipped the first scheduled frames
+     * in board tests. Use a separate, completely prepared ISO table before
+     * PSE. The tests do not establish the internal buffering mechanism.
+     * Keep polling disabled until the handshake and deadline checks finish;
+     * wait_ms may re-enter ls2k_iso_poll. */
+    prepared_at = hc->io->time_ms(hc->ctx);
     frame = (current_frame(hc) + 4) & 2047;
     for (unsigned i = 0; i < LUSB_ISO_SLOTS; ++i)
     {
@@ -131,11 +163,43 @@ int ls2k_iso_start(struct ls2k_ehci *hc, struct ls2k_iso *s, uint64_t physical, 
     }
 
     s->next_frame = (frame + LUSB_ISO_SLOTS) & 2047;
-    s->running = true;
-    hc->io->write(hc->ctx, LUSB_PERIODIC, hc->dma_address + offsetof(struct ls2k_usb_dma, frames));
+
+    hc->io->write(hc->ctx, LUSB_PERIODIC, s->physical + offsetof(struct ls2k_iso_dma, frames));
     hc->io->barrier(hc->ctx);
     hc->io->write(hc->ctx, LUSB_CMD, hc->io->read(hc->ctx, LUSB_CMD) | LUSB_PSE);
     hc->io->barrier(hc->ctx);
+    start = hc->io->time_ms(hc->ctx);
+
+    while (!(hc->io->read(hc->ctx, LUSB_STS) & LUSB_PSS))
+    {
+        if ((uint32_t)(hc->io->time_ms(hc->ctx) - start) >= 100)
+        {
+            /* Preserve the permanent arena if shutdown cannot be confirmed.
+             * stop performs full controller halt/quarantine when necessary. */
+            return ls2k_iso_stop(hc) ? -USB_ERR_IO : -USB_ERR_TIMEOUT;
+        }
+
+        hc->io->wait_ms(hc->ctx, 1);
+    }
+
+    /* The initial +4-frame target is at most 32 microframes ahead. This
+     * upper bound also rejects a target already passed across FRINDEX wrap.
+     * The independent elapsed-time bound rejects a long preemption spanning
+     * a complete FRINDEX wrap that would otherwise look like a future slot.
+     * A late enable is a failed start; do not silently lose initial packets
+     * or rewrite a schedule already owned by the controller. */
+    uint32_t first_uframe = (uint32_t)s->frame[0] << 3;
+    uint32_t ahead = (first_uframe - hc->io->read(hc->ctx, LUSB_FRAME)) & 0x3fffU;
+
+    if ((uint32_t)(hc->io->time_ms(hc->ctx) - prepared_at) >= 4 ||
+        ahead < LUSB_ISO_START_MARGIN_UFRAMES || ahead > 32)
+    {
+        return ls2k_iso_stop(hc) ? -USB_ERR_IO : -USB_ERR_TIMEOUT;
+    }
+
+    s->last_poll = hc->io->time_ms(hc->ctx);
+    s->last_read = s->last_poll;
+    s->running = true;
     return 0;
 }
 
@@ -183,6 +247,11 @@ void ls2k_iso_poll(struct ls2k_ehci *hc)
     }
 
     clock = hc->io->time_ms(hc->ctx);
+    if ((uint32_t)(clock - s->last_poll) > s->max_poll_gap)
+    {
+        s->max_poll_gap = clock - s->last_poll;
+    }
+
     if (!hc->ready || (hc->io->read(hc->ctx, LUSB_STS) & LUSB_FATAL) ||
         !(hc->io->read(hc->ctx, LUSB_PORT) & 1) || (uint32_t)(clock - s->last_poll) >= 512)
     {
@@ -206,12 +275,24 @@ void ls2k_iso_poll(struct ls2k_ehci *hc)
             break;
         }
 
-        hc->dma->frames[s->frame[i] & 1023] = tail(s, s->frame[i] & 1023);
+        s->dma->frames[s->frame[i] & 1023] = tail(s, s->frame[i] & 1023);
         for (unsigned u = 0; u < 8; u += s->interval)
         {
             uint32_t status = d->transaction[u];
             unsigned length = (status >> 16) & 0xfff;
             struct ls2k_iso_packet *p;
+
+            s->missed_transactions += !!(status & (1U << 31));
+            s->transaction_errors += !!(status & 0x70000000U);
+
+            /* Successful zero-byte microframes carry no UVC header or data.
+             * Do not consume queue slots between camera images. Keep every
+             * error, including a zero-byte error, visible to the assembler. */
+            if (!(status & 0xf0000000U) && !length)
+            {
+                ++s->empty_transactions;
+                continue;
+            }
 
             if (s->count == LUSB_ISO_QUEUE)
             {
@@ -221,6 +302,12 @@ void ls2k_iso_poll(struct ls2k_ehci *hc)
             }
 
             p = &s->queue[(s->head + s->count++) % LUSB_ISO_QUEUE];
+
+            if (s->count > s->max_queued)
+            {
+                s->max_queued = s->count;
+            }
+
             p->error = (status & 0xf0000000U) || length > s->capacity ? -USB_ERR_IO : 0;
             p->length = p->error ? 0 : length;
             if (p->length)
@@ -234,6 +321,7 @@ void ls2k_iso_poll(struct ls2k_ehci *hc)
         {
             s->next_frame = (now + 4) & 2047;
             s->lost = true;
+            ++s->late_reschedules;
         }
 
         schedule(hc, i, s->next_frame);
@@ -247,11 +335,21 @@ int ls2k_iso_read(struct ls2k_ehci *hc, uint8_t *data, size_t capacity)
     struct ls2k_iso *s = hc->iso;
     struct ls2k_iso_packet *p;
     int result;
+    uint32_t clock;
 
     if (!s || !s->running)
     {
         return -USB_ERR_NODEV;
     }
+
+    clock = hc->io->time_ms(hc->ctx);
+
+    if ((uint32_t)(clock - s->last_read) > s->max_read_gap)
+    {
+        s->max_read_gap = clock - s->last_read;
+    }
+
+    s->last_read = clock;
 
     if (s->lost)
     {

@@ -33,6 +33,9 @@ struct model
     unsigned int event_count, next_event, commands, starts, stops;
     int active, dma_active, reset_stuck, query_stuck, stop_stuck;
     int dma_incomplete, fifo_stuck;
+    int query_override;
+    uint32_t query_state, last_data, last_command;
+    unsigned int ready_after;
     unsigned char media[LSD_BUFFER_SIZE];
 };
 
@@ -113,8 +116,18 @@ static void model_write(void *context, unsigned int reg, uint32_t value)
                 m->dma_active = 0;
             }
 
+            if (m->query_override)
+            {
+                m->dma.query.command = m->query_state;
+            }
+
             m->regs[reg / 4] &= ~LSD_DMA_QUERY;
         }
+    }
+
+    if (reg == LSD_DATA && value)
+    {
+        m->last_data = value;
     }
 
     if (reg == LSD_CMD && (value & LSD_CMD_START))
@@ -125,6 +138,12 @@ static void model_write(void *context, unsigned int reg, uint32_t value)
         m->start = m->now;
         m->next_event = 0;
         m->commands++;
+        m->last_command = value;
+
+        if ((value & 63U) == 13 && m->ready_after && m->commands > m->ready_after)
+        {
+            m->regs[LSD_RESPONSE / 4] = 0x900U;
+        }
         if (m->dma_active)
         {
             if (m->dma.transfer.command & (1U << 12))
@@ -198,6 +217,80 @@ static struct ls2k_sdio_command data_command(void *buffer)
     cmd.blocks = LSD_BUFFER_SIZE / 512;
     cmd.timeout_ms = 20;
     return cmd;
+}
+
+/* Independent Vanguard TF captures, 2026-10-28, with CMD6_DATA enabled:
+ * 4-bit: ui-cmd6diag-load.log; 1-bit: ui-cmd6one-load.log.
+ * Each capture contains identical data for CHECK and SWITCH requests. */
+static void test_cmd6_bus_width(void)
+{
+    static const uint8_t raw_four_bit[64] =
+    {
+        0x00, 0x8c, 0x08, 0x10, 0x08, 0x10, 0x08, 0x10,
+        0x08, 0x10, 0x0c, 0x10, 0x08, 0x30, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+
+    static const uint8_t raw_one_bit[64] =
+    {
+        0x00, 0x13, 0x01, 0x80, 0x01, 0x80, 0x01, 0x80,
+        0x01, 0x80, 0x03, 0x80, 0x01, 0xc0, 0x00, 0x00,
+        0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+
+    static const uint8_t expected[64] =
+    {
+        0x00, 0xc8, 0x80, 0x01, 0x80, 0x01, 0x80, 0x01,
+        0x80, 0x01, 0xc0, 0x01, 0x80, 0x03, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+
+    struct model m;
+    uint8_t guarded[66];
+    const unsigned int widths[] = {1, 4};
+    const uint32_t arguments[] = {0x00fffff1, 0x80fffff1};
+
+    for (unsigned int w = 0; w < 2; ++w)
+    {
+        for (unsigned int a = 0; a < 2; ++a)
+        {
+            initialize(&m);
+            m.sd.width = widths[w];
+            memcpy(m.media, w ? raw_four_bit : raw_one_bit, 64);
+            memset(guarded, 0xa5, sizeof(guarded));
+            struct ls2k_sdio_command cmd = data_command(guarded + 1);
+
+            cmd.index = 6;
+            cmd.argument = arguments[a];
+            cmd.block_size = 64;
+            cmd.blocks = 1;
+            assert(ls2k_sdio_transfer(&m.sd, &cmd) == LSD_OK);
+            assert(m.last_command & LSD_CMD6_DATA);
+            assert(!!(m.last_data & LSD_DATA_WIDE) == (widths[w] == 4));
+            assert(!memcmp(guarded + 1, expected, 64));
+            assert(guarded[0] == 0xa5 && guarded[65] == 0xa5);
+            assert(((unsigned int)guarded[1] << 8 | guarded[2]) == 200);
+            assert(((unsigned int)guarded[13] << 8 | guarded[14]) == 0x8003);
+            assert((guarded[17] & 15) == 1);
+        }
+    }
+
+    puts("SDIO: CMD6 independent captured 1-bit and 4-bit payloads PASS");
 }
 
 int main(void)
@@ -327,14 +420,7 @@ int main(void)
     assert(ls2k_sdio_transfer(&m.sd, &cmd) == LSD_INVALID);
     assert(!m.commands && !m.starts);
 
-    initialize(&m);
-    cmd = data_command(guarded + 1);
-    cmd.index = 6;
-    cmd.block_size = 64;
-    cmd.blocks = 1;
-    memset(m.media, 0x96, 64);
-    assert(ls2k_sdio_transfer(&m.sd, &cmd) == 0);
-    assert(guarded[1] == 0x69 && guarded[64] == 0x69);
+    test_cmd6_bus_width();
 
     initialize(&m);
     cmd = (struct ls2k_sdio_command){.index = 12, .response_present = 1,
@@ -349,6 +435,56 @@ int main(void)
     m.event_count = 0;
     assert(ls2k_sdio_transfer(&m.sd, &cmd) == 0);
 
+    /* eMMC EXT_CSD uses eight-bit SDR without the SD CMD6 bit reversal. */
+    initialize(&m);
+    m.sd.emmc = 1;
+    m.sd.width = 8;
+    cmd = data_command(guarded + 1);
+    cmd.index = 8;
+    cmd.blocks = 1;
+    memset(m.media, 0x96, 512);
+    assert(ls2k_sdio_transfer(&m.sd, &cmd) == LSD_OK);
+    assert((m.last_data & LSD_DATA_WIDE8) && !(m.last_data & LSD_DATA_WIDE));
+    assert(!(m.last_command & LSD_CMD6_DATA));
+    assert(guarded[1] == 0x96 && guarded[512] == 0x96);
+    m.sd.emmc = 0;
+    assert(ls2k_sdio_transfer(&m.sd, &cmd) == LSD_INVALID);
+
+    /* A stale DONE bit, active read/write state, or an untouched QUERY
+     * sentinel must never make storage reusable after a failed stop. */
+    const uint32_t unsafe_states[] = {0x519, 0x598, 0x528, 0x108, UINT32_MAX};
+
+    for (size_t i = 0; i < sizeof(unsafe_states) / sizeof(unsafe_states[0]); ++i)
+    {
+        initialize(&m);
+        m.query_override = 1;
+        m.query_state = unsafe_states[i];
+        cmd = data_command(guarded + 1);
+        assert(ls2k_sdio_transfer(&m.sd, &cmd) == LSD_FAULT);
+        assert(m.sd.fault && m.stops == 1);
+    }
+
+    initialize(&m);
+    m.query_override = 1;
+    m.query_state = 0x508;
+    assert(ls2k_sdio_transfer(&m.sd, &cmd) == LSD_OK);
+
+    initialize(&m);
+    m.regs[LSD_RESPONSE / 4] = 0xb00; /* READY, but still receiving data. */
+    m.ready_after = 3;
+    assert(ls2k_sdio_wait_ready(&m.sd, 7, 20) == LSD_OK);
+    assert(m.commands == 4 && m.regs[LSD_ARG / 4] == (7U << 16));
+    initialize(&m);
+    m.regs[LSD_RESPONSE / 4] = 0xf00; /* READY alone is insufficient in PRG. */
+    assert(ls2k_sdio_wait_ready(&m.sd, 7, 10) == LSD_TIMEOUT);
+    initialize(&m);
+    m.regs[LSD_RESPONSE / 4] = 0x80000900;
+    assert(ls2k_sdio_wait_ready(&m.sd, 7, 10) == LSD_IO);
+    assert(ls2k_sdio_wait_ready(&m.sd, 0, 10) == LSD_INVALID);
+    assert(ls2k_sdio_wait_ready(&m.sd, 7, 0) == LSD_INVALID);
+    assert(ls2k_sdio_wait_ready(&m.sd, 7, 10001) == LSD_INVALID);
+
+    puts("SDIO: eMMC SDR8, query writeback, stale DONE and CMD13 readiness PASS");
     puts("SDIO: 200 MiB round trip, ordering, bounds, CRC, timeout, recovery and DMA quarantine PASS");
     return 0;
 }

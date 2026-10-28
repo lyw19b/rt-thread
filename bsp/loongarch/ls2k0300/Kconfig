@@ -17,6 +17,9 @@ config RT_CPUS_NR
     default 1 if RT_USING_SMP
     range 1 1 if RT_USING_SMP
 
+config RT_MMCSD_STACK_SIZE
+    default 16384 if BSP_USING_SDIO && RT_USING_SMART
+
 source "$(RTT_DIR)/Kconfig"
 osource "$PKGS_DIR/Kconfig"
 
@@ -66,6 +69,15 @@ config BSP_RAM_END
         lowering this boundary. The DDR controller window at 0x0ff00000 is
         excluded even when firmware leaves it enabled.
 
+config BSP_USING_VANGUARD
+    bool "Vanguard Pi physical board wiring"
+    depends on !BSP_USING_LS2K0300_QEMU && !BSP_USING_HUMMINGBIRD
+    default y if BSP_USING_VANGUARD_TOUCH
+    help
+        Enable the physical Vanguard reset and USB-A power adapters even
+        when building a headless kernel. Display/touch remain optional.
+        Existing physical Vanguard touch configurations select this default.
+
 config BSP_USING_VANGUARD_TOUCH
     bool "Vanguard Pi I2C0 GT9147 touch wiring"
     depends on LAXPU_USING_DISPLAY
@@ -97,22 +109,44 @@ config BSP_USING_SELFTEST
 source "$(RTT_DIR)/bsp/loongarch/common/gmac/Kconfig"
 
 menuconfig BSP_USING_SDIO
-    bool "LS2K0300 SD memory card (SDIO 1.2)"
+    bool "LS2K0300 SD/eMMC memory hosts (SDIO 1.2)"
     depends on !RT_USING_NANO
     select RT_USING_SDIO
     select RT_USING_MUTEX
     select RT_USING_SEMAPHORE
     default n
     help
-        Native SD memory host with bounded DMA and dedicated uncached storage.
-        Firmware must supply 3.3 V card power. Insert the card before boot.
+        Native memory hosts with bounded DMA and dedicated uncached storage.
+        Firmware supplies power. SD cards require 3.3 V; eMMC uses its fixed
+        board voltage. Insert cards before boot. Payload writes are disabled
+        unless explicitly enabled below.
         SDIO function devices, UHS, eMMC DDR and hot removal are not supported.
 
 if BSP_USING_SDIO
+    config BSP_SDIO_DUAL_HOST
+        bool "Own SDIO0 eMMC and SDIO1 TF together"
+        depends on BSP_USING_VANGUARD
+        default y
+        help
+            Quiesce both owned controller/DMA domains before selecting their
+            shared divider. Register mmc0 for eMMC and mmc1 for the TF socket.
+            SDR 8-bit eMMC requires the native eMMC boot strap.
+
+    config BSP_SDIO_ALLOW_WRITE
+        bool "Allow SD/eMMC payload writes and erase"
+        default n
+        help
+            Leave disabled for board bring-up and read-only validation.
+            eMMC partition/OTP programming and cache enable are always blocked.
+
     config BSP_SDIO_PORT
         int "SDIO controller index"
         range 0 1
+        depends on !BSP_SDIO_DUAL_HOST
+        default 1 if BSP_USING_VANGUARD
         default 0
+        help
+            Vanguard Pi connects its TF socket to SDIO1; SDIO0 serves eMMC.
 
     config BSP_SDIO_ROOT_CLOCK_HZ
         int "DEVICE clock before SDIO division (0 reads PLL registers)"
@@ -121,16 +155,26 @@ if BSP_USING_SDIO
         help
             This is the clock BEFORE the shared SDIO divider at 0x16000420.
             The driver raises the divider if needed for <=400 kHz card setup.
-            It refuses to change the divider while the other port is clocked.
+            Single-host mode refuses to disturb a clocked unowned port.
+            Dual-host mode rejects card activity, then confirms both owned
+            DMA domains are idle before changing their shared clock.
 
     config BSP_SDIO_MAX_CLOCK_HZ
         int "Maximum SD card clock (Hz)"
         range 400000 25000000
         default 25000000
 
+    config BSP_SDIO_USING_BLOCK_TEST
+        bool "Build sdio_block_test read-only block diagnostic"
+        depends on RT_USING_FINSH
+        default n
+        help
+            Repeat sequential reads and compare deterministic whole-device
+            samples, including the last sectors. Never writes or mounts media.
+
     config BSP_SDIO_USING_FILE_TEST
         bool "Build sd_filetest filesystem round-trip diagnostic"
-        depends on RT_USING_FINSH && RT_USING_POSIX_FS
+        depends on RT_USING_FINSH && RT_USING_POSIX_FS && BSP_SDIO_ALLOW_WRITE
         default n
 endif
 
@@ -147,7 +191,9 @@ menuconfig BSP_USING_USB_HOST
     help
         Board-owned EHCI HCD with unchanged CherryUSB core/hub/MSC sources.
         High-speed USB disks may attach directly or through one high-speed hub.
-        Firmware must supply VBUS, PHY reference clock and release USB reset.
+        Firmware must supply the PHY reference clock and release USB reset.
+        Physical Vanguard supplies USB-A VBUS through its OTG host port;
+        other boards require firmware or fixed board wiring to supply VBUS.
         OHCI low/full-speed devices, OTG and HID are not enabled.
         DMA uses dedicated uncached physical memory in both DMW and PAGE modes.
 
@@ -161,7 +207,7 @@ config BSP_USING_USB_CAMERA
         Project-owned UVC 1.0/1.1/1.5 MJPEG and YUYV capture via /dev/video0.
         Supports one high-speed isochronous IN (bInterval 1..4) or Bulk IN
         stream. Uses bounded, permanent uncached DMA and copied frame rings.
-        Firmware must enable the board USB Host PHY and VBUS.
+        USB Host initialization must supply the board PHY and VBUS.
 
 source "$(RTT_DIR)/../../driver/rtos/Kconfig"
 

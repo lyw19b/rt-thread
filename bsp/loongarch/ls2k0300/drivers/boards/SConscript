@@ -16,4 +16,8 @@ src = Glob('*.c')
 SrcRemove(src, ['drv_interrupt.c'])
 group = DefineGroup('LS2K0300 board adaptation', src, depend=[''], CPPPATH=[cwd],
                     LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+
+for directory in ('hummingbird', 'vanguard'):
+    group = group + SConscript(os.path.join(directory, 'SConscript'))
+
 Return('group')

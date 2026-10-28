@@ -8,9 +8,16 @@
 # Description:
 #   LS2K0300 development BSP: SConscript.
 
+import os
+import rtconfig
 from building import *
 
 cwd = GetCurrentDir()
-group = DefineGroup('LS2K0300 SD', Glob('*.c'), depend=['BSP_USING_SDIO'],
+sources = Glob('*.c')
+
+if GetDepend('BSP_SDIO_USING_BLOCK_TEST'):
+    sources += [os.path.join(rtconfig.RTT_ROOT, 'examples/test/ls2k_sdio_block_test.c')]
+
+group = DefineGroup('LS2K0300 SD', sources, depend=['BSP_USING_SDIO'],
                     CPPPATH=[cwd], LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
 Return('group')
