@@ -23,6 +23,11 @@
 #include "ls2k_usb_platform.h"
 
 #ifdef BSP_USING_USB_HOST
+rt_weak rt_err_t ls2k_usb_board_prepare(void)
+{
+    return RT_EOK;
+}
+
 rt_weak rt_err_t ls2k_usb_board_power_on(void)
 {
     return RT_EOK;
@@ -35,7 +40,14 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
     const rt_uint32_t host_override = (1U << 28) | (1U << 30);
     rt_uint32_t control;
     rt_uint32_t phy_control;
+    rt_uint32_t revision;
     rt_err_t error;
+
+    error = ls2k_usb_board_prepare();
+    if (error != RT_EOK)
+    {
+        return error;
+    }
 
     if ((HWREG32(LOONGARCH_PHYS_UNCACHED(0x16000114UL)) & 0x180) != 0x180 ||
         (HWREG32(LOONGARCH_PHYS_UNCACHED(0x1600011cUL)) & 0x180) != 0x180)
@@ -44,7 +56,14 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
         return -RT_ERROR;
     }
 
-    if ((HWREG32(companion) & 0xff) != 0x10)
+#ifdef BSP_USING_LS2K0302
+    rt_kprintf("2K0302 USB: reading OHCI revision at %p (32-bit)\n", (void *)companion);
+#endif
+    revision = HWREG32(companion);
+#ifdef BSP_USING_LS2K0302
+    rt_kprintf("2K0302 USB: OHCI revision %08x\n", revision);
+#endif
+    if ((revision & 0xff) != 0x10)
     {
         rt_kprintf("USB: unexpected OHCI companion revision\n");
         return -RT_ENOSYS;

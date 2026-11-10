@@ -78,6 +78,15 @@ config BSP_USING_VANGUARD
         when building a headless kernel. Display/touch remain optional.
         Existing physical Vanguard touch configurations select this default.
 
+config BSP_USING_LS2K0302
+    bool "X2K032Z0 physical 2K0302 board"
+    depends on !BSP_USING_LS2K0300_QEMU && !BSP_USING_VANGUARD && !BSP_USING_HUMMINGBIRD
+    default n
+    help
+        UART6 and GMAC0 board. Its USB Host uses the SoC EHCI with a 24 MHz
+        reference and permanently enabled USB_PWR (schematic sheet 21, U29).
+        Provide module clocks/reset handoff without Vanguard OTG power wiring.
+
 config BSP_USING_VANGUARD_TOUCH
     bool "Vanguard Pi I2C0 GT9147 touch wiring"
     depends on LAXPU_USING_DISPLAY
@@ -198,7 +207,7 @@ menuconfig BSP_USING_USB_HOST
         DMA uses dedicated uncached physical memory in both DMW and PAGE modes.
 
 config BSP_USING_USB_CAMERA
-    bool "OpenLANPU UVC camera (Vanguard high-speed USB Host)"
+    bool "OpenLANPU UVC camera (LS2K0300/2K0302 high-speed USB Host)"
     depends on BSP_USING_USB_HOST && RT_USING_SMART && RT_USING_DFS_V2
     depends on RT_USING_DFS_DEVFS && RT_USING_POSIX_DEVIO && RT_USING_POSIX_POLL
     depends on RT_TICK_PER_SECOND >= 1000

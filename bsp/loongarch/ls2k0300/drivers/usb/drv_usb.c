@@ -679,16 +679,13 @@ static long usb_list(int argc, char **argv)
 MSH_CMD_EXPORT_ALIAS(usb_list, lsusb, list enumerated USB devices);
 #pragma GCC diagnostic pop
 
-static int ls2k_usb_init(void)
+static int ls2k_usb_start(void)
 {
     rt_ubase_t base;
     uint32_t cap, parameters;
     rt_err_t error;
     rt_thread_t worker;
 
-    rt_mutex_init(&host_lock, "usb_host", RT_IPC_FLAG_PRIO);
-    rt_mutex_init(&callback_lock, "usb_cb", RT_IPC_FLAG_PRIO);
-    rt_sem_init(&host_event, "usb_event", 0, RT_IPC_FLAG_PRIO);
     error = ls2k_usb_platform_init(&base, &usb_irq, &hardware_ports);
 
     if (error)
@@ -696,8 +693,14 @@ static int ls2k_usb_init(void)
         return error;
     }
 
+#ifdef BSP_USING_LS2K0302
+    rt_kprintf("2K0302 USB: reading EHCI capabilities at %p (32-bit)\n", (void *)base);
+#endif
     cap = HWREG32(base);
     parameters = HWREG32(base + 4);
+#ifdef BSP_USING_LS2K0302
+    rt_kprintf("2K0302 USB: EHCI capabilities %08x ports %08x\n", cap, parameters);
+#endif
     if ((cap & 0xff) < 0x10 || (cap & 0xff) > 0x80 || (cap & 3) || (cap >> 16) != 0x100 ||
         (parameters & 15) != hardware_ports)
     {
@@ -725,4 +728,38 @@ static int ls2k_usb_init(void)
     return usbh_initialize(0, base, NULL);
 }
 
+static int ls2k_usb_init(void)
+{
+    rt_mutex_init(&host_lock, "usb_host", RT_IPC_FLAG_PRIO);
+    rt_mutex_init(&callback_lock, "usb_cb", RT_IPC_FLAG_PRIO);
+    rt_sem_init(&host_event, "usb_event", 0, RT_IPC_FLAG_PRIO);
+#ifdef BSP_USING_LS2K0302
+    /* Cold USB handoff is not yet validated on this board. A blocked MMIO
+     * can stop the CPU bus, so neither a thread nor a timeout isolates it.
+     * Start UI/network without touching USB; opt in through the console. */
+    rt_kprintf("2K0302 USB: hardware initialization deferred; use usb_start\n");
+    return RT_EOK;
+#else
+    return ls2k_usb_start();
+#endif
+}
 INIT_APP_EXPORT(ls2k_usb_init);
+
+#if defined(BSP_USING_LS2K0302) && defined(RT_USING_FINSH)
+static void usb_start(void)
+{
+    static bool attempted;
+    int result;
+
+    if (attempted)
+    {
+        rt_kprintf("2K0302 USB: start already attempted; inspect usb_status before reboot\n");
+        return;
+    }
+    attempted = true;
+    rt_kprintf("2K0302 USB: explicit hardware start; blocked MMIO may require CPU reset\n");
+    result = ls2k_usb_start();
+    rt_kprintf("2K0302 USB: hardware start returned %d\n", result);
+}
+MSH_CMD_EXPORT(usb_start, Explicitly initialize the unverified physical 2K0302 USB host);
+#endif

@@ -17,6 +17,7 @@
 #include <rtthread.h>
 
 rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardware_ports);
+rt_err_t ls2k_usb_board_prepare(void);
 rt_err_t ls2k_usb_board_power_on(void);
 
 #endif
