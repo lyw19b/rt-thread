@@ -47,6 +47,10 @@ struct gmac_device
     rt_bool_t fault, recovering;
     rt_bool_t initialized, registered;
     rt_uint32_t bus_errors, rx_dropped, recoveries;
+    /* Ethernet's 14-byte header misaligns pbuf payloads. Gather in cached,
+     * aligned storage before touching uncached DMA memory. Owned by lock.
+     */
+    rt_uint64_t tx_staging[GMAC_BUFFER_SIZE / sizeof(rt_uint64_t)];
 #ifdef BSP_GMAC_USING_ECHO_TEST
     rt_uint32_t tx_checksum_errors;
     rt_uint32_t tx_reclaim_errors;
@@ -496,10 +500,16 @@ static rt_err_t _transmit(rt_device_t device, struct pbuf *packet)
             return -RT_ETIMEOUT;
         rt_thread_mdelay(1);
     }
-    if (pbuf_copy_partial(packet, buffer, length, ETH_PAD_SIZE) != length)
+    if (pbuf_copy_partial(packet, dev->tx_staging, length, ETH_PAD_SIZE) != length)
         error = -RT_ERROR;
     else
     {
+        /* rt_memcpy falls back to byte stores if either pointer is unaligned.
+         * On uncached DDR that makes one bus transaction per byte. Both ends
+         * here are naturally aligned, allowing the existing word-copy path.
+         * The core's submit barrier still precedes the DMA ownership transfer.
+         */
+        rt_memcpy(buffer, dev->tx_staging, length);
 #ifdef BSP_GMAC_USING_ECHO_TEST
         _check_udp_frame(dev, buffer, length, RT_TRUE);
         _trace_tx_submit(dev, buffer, length);
