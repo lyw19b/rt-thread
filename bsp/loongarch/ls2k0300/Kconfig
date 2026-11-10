@@ -211,6 +211,8 @@ config BSP_USING_USB_CAMERA
 
 source "$(RTT_DIR)/../../driver/rtos/Kconfig"
 
+source "$(BSP_DIR)/drivers/vnc/Kconfig"
+
 source "$(RTT_DIR)/../../display/systemui/Kconfig"
 
 menu "Imported LS2K0300 peripherals"

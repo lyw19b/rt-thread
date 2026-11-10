@@ -1,0 +1,19 @@
+# Copyright (C) 2026 OpenLANPU Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Description:
+#   Keep protocol, virtual devices and network transport in the board VNC group.
+
+from building import *
+
+cwd = GetCurrentDir()
+src = ['vnc_display.c', 'vnc_server.c', 'vnc_rfb.c', 'vnc_net_heap.c']
+link_flags = ' -Wl,--wrap=mem_malloc,--wrap=mem_calloc,--wrap=mem_free' if GetDepend('BSP_USING_VNC') else ''
+if GetDepend('BSP_USING_VNC') and GetDepend('BSP_VNC_PROFILE_TCP'):
+    src += ['vnc_tcp_profile.c']
+    link_flags += ' -Wl,--wrap=tcp_write,--wrap=tcp_output,--wrap=rt_malloc'
+group = DefineGroup('LS2K0300 remote display',
+                    src, LINKFLAGS=link_flags,
+                    depend=['BSP_USING_VNC'], CPPPATH=[cwd],
+                    LOCAL_CCFLAGS=['-Wall', '-Wextra', '-Werror', '-Wno-ignored-qualifiers'])
+Return('group')

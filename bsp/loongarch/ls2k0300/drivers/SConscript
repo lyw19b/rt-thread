@@ -16,7 +16,7 @@ cwd = GetCurrentDir()
 group = DefineGroup('LS2K0300 board interfaces', [], depend=[''],
                     CPPPATH=[os.path.join(cwd, name) for name in ('boards', 'usb', 'sd', 'power')])
 
-for directory in ('boards', 'power', 'usb', 'sd', 'bsp', 'gpio', 'adc', 'i2c',
+for directory in ('boards', 'power', 'usb', 'sd', 'vnc', 'bsp', 'gpio', 'adc', 'i2c',
                   'pwm', 'rtc', 'spi', 'thermal', 'watchdog', 'ssd1306'):
     group = group + SConscript(os.path.join(directory, 'SConscript'))
 

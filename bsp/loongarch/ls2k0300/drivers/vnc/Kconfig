@@ -1,0 +1,42 @@
+# Copyright (C) 2026 OpenLANPU Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig BSP_USING_VNC
+    bool "Headless memory display and VNC server"
+    depends on RT_USING_LWIP && RT_USING_SAL && SAL_USING_POSIX
+    depends on !LAXPU_USING_DISPLAY && !BSP_USING_HUMMINGBIRD
+    select RT_USING_DEVICE
+    select RT_USING_DEVICE_OPS
+    select RT_USING_MUTEX
+    select RT_USING_TOUCH
+    select RT_USING_SMALL_MEM
+    default n
+    help
+        Register a memory-backed lcd and mouse, then serve one RFB viewer.
+        No physical LCD, touch controller, or accelerator is required.
+        Supports Raw true-color updates and left-button pointer input.
+        The service has no authentication or encryption: use a trusted LAN.
+        At 1024x600, two framebuffers plus two client images need about 9.4 MiB.
+
+if BSP_USING_VNC
+config BSP_VNC_NET_HEAP_KIB
+    int "Reserved lwIP buffer heap (KiB)"
+    range 128 2048
+    default 512
+    help
+        Keep TCP pbuf allocation independent of Smart ELF/page-cache heap
+        fragmentation. This is a fixed board-lifetime memory budget.
+
+config BSP_VNC_PROFILE_TCP
+    bool "Instrument TCP write/output and heap allocation timing"
+    default n
+    help
+        BSP-local linker wrappers; shared lwIP and kernel sources stay unchanged.
+        Print cumulative wall-clock tick counts through vnc_status. Disable for
+        normal operation after identifying the transport bottleneck.
+
+config BSP_VNC_PORT
+    int "VNC TCP listen port"
+    range 1024 65535
+    default 5900
+endif
