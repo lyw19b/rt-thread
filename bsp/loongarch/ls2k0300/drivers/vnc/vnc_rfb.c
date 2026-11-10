@@ -130,7 +130,7 @@ static int valid_format(const uint8_t *format)
 int vnc_rfb_handshake(struct vnc_rfb_session *session)
 {
     static const char version[] = "RFB 003.008\n";
-    static const char name[] = "NovaUIOS / Vanguard";
+    static const char name[] = "NovaUIOS / RT-Thread";
     static const uint8_t default_format[16] = {
         32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0
     };
