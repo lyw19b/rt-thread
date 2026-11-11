@@ -13,7 +13,7 @@
  */
 
 #include <rtthread.h>
-#if defined(BSP_USING_LAXPU) && !defined(BSP_USING_LS2K0300_QEMU) && !defined(BSP_USING_HUMMINGBIRD)
+#if defined(BSP_USING_LAXPU) && !defined(BSP_USING_LS2K0300_QEMU) && !defined(BSP_USING_HUMMINGBIRD) && !defined(BSP_USING_NV2K0302)
 #include <laxpu_board.h>
 #include "ls2k.h"
 

@@ -20,7 +20,7 @@ for directory in ('boards', 'power', 'usb', 'sd', 'vnc', 'bsp', 'gpio', 'adc', '
                   'pwm', 'rtc', 'spi', 'thermal', 'watchdog', 'ssd1306'):
     group = group + SConscript(os.path.join(directory, 'SConscript'))
 
-if GetDepend('BSP_USING_LAXPU'):
+if GetDepend('BSP_USING_LAXPU') or GetDepend('BSP_USING_NV2K0302'):
     driver_dir = os.path.abspath(os.path.join(rtconfig.RTT_ROOT,
                                             '..', '..', 'driver', 'rtos'))
     group = group + SConscript(os.path.join(driver_dir, 'SConscript'),
