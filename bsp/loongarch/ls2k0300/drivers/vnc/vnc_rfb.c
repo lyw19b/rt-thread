@@ -182,12 +182,17 @@ int vnc_rfb_handshake(struct vnc_rfb_session *session)
         return -1;
     }
 
-    memcpy(session->format, default_format, sizeof(default_format));
+    /* A server may prefer RGB565 to reduce network traffic. Clients can still
+     * negotiate any supported format through the standard SetPixelFormat. */
+    if (!valid_format(session->format))
+    {
+        memcpy(session->format, default_format, sizeof(default_format));
+    }
     session->pending = 0;
     session->delivered_full_frame = 0;
     write_u16(init, session->width);
     write_u16(init + 2, session->height);
-    memcpy(init + 4, default_format, 16);
+    memcpy(init + 4, session->format, 16);
     init[23] = sizeof(name) - 1;
     return send_exact(session, init, sizeof(init)) ||
            send_exact(session, name, sizeof(name) - 1) ? -1 : 0;
@@ -327,14 +332,38 @@ static int native_pixel_format(const struct vnc_rfb_session *session)
 #endif
 }
 
-static void encode_row(struct vnc_rfb_session *session, const uint32_t *source, unsigned width)
+static void encode_row(struct vnc_rfb_session *session, const uint32_t *source, unsigned width,
+                       uint8_t *target)
 {
+    static const uint8_t rgb565_format[13] = {
+        16, 16, 0, 1, 0, 31, 0, 63, 0, 31, 11, 5, 0
+    };
     unsigned bytes = session->format[0] / 8;
     unsigned x, channel, byte;
 
     if (native_pixel_format(session))
     {
-        memcpy(session->row, source, (size_t)width * 4);
+        memcpy(target, source, (size_t)width * 4);
+        return;
+    }
+
+    /* The board viewer normally negotiates this format. Keep the same rounded
+     * component mapping as the general encoder, without its channel/byte loops
+     * and per-pixel format lookups. This does not change framebuffer pixels. */
+    if (!memcmp(session->format, rgb565_format, sizeof(rgb565_format)))
+    {
+        for (x = 0; x < width; x++)
+        {
+            unsigned red = (source[x] >> 16) & 255;
+            unsigned green = (source[x] >> 8) & 255;
+            unsigned blue = source[x] & 255;
+            unsigned pixel = ((red * 31 + 127) / 255) << 11 |
+                             ((green * 63 + 127) / 255) << 5 |
+                             (blue * 31 + 127) / 255;
+
+            target[x * 2] = pixel;
+            target[x * 2 + 1] = pixel >> 8;
+        }
         return;
     }
 
@@ -353,7 +382,7 @@ static void encode_row(struct vnc_rfb_session *session, const uint32_t *source, 
         {
             unsigned shift = session->format[2] ? (bytes - byte - 1) * 8 : byte * 8;
 
-            session->row[x * bytes + byte] = pixel >> shift;
+            target[x * bytes + byte] = pixel >> shift;
         }
     }
 }
@@ -387,7 +416,7 @@ static int send_hextile(struct vnc_rfb_session *session, const struct vnc_rfb_re
             if (width > 16) width = 16;
             if (height > 16) height = 16;
             raw_size = 1 + width * height * bytes;
-            encode_row(session, &background, 1);
+            encode_row(session, &background, 1, session->row);
             memcpy(tile + 1, session->row, bytes);
 
             for (y = 0; y < height && !raw; y++)
@@ -408,7 +437,7 @@ static int send_hextile(struct vnc_rfb_session *session, const struct vnc_rfb_re
                         raw = 1;
                         break;
                     }
-                    encode_row(session, &color, 1);
+                    encode_row(session, &color, 1, session->row);
                     memcpy(tile + used, session->row, bytes);
                     used += bytes;
                     tile[used++] = (start << 4) | y;
@@ -422,7 +451,7 @@ static int send_hextile(struct vnc_rfb_session *session, const struct vnc_rfb_re
                 used = 1;
                 for (y = 0; y < height; y++)
                 {
-                    encode_row(session, origin + (size_t)y * session->width, width);
+                    encode_row(session, origin + (size_t)y * session->width, width, session->row);
                     memcpy(tile + used, session->row, width * bytes);
                     used += width * bytes;
                 }
@@ -484,7 +513,7 @@ static int send_cursor(struct vnc_rfb_session *session)
          */
         for (x = 0; x < 12; x++)
         {
-            encode_row(session, pixels + x, 1);
+            encode_row(session, pixels + x, 1, session->row);
             memcpy(encoded + (y * 12 + x) * bytes, session->row, bytes);
         }
     }
@@ -546,15 +575,15 @@ static int send_rectangle(struct vnc_rfb_session *session, const struct vnc_rfb_
                        (size_t)area->height * session->width * 4))
             return -1;
     }
-    else if (native_pixel_format(session))
+    else
     {
-        size_t row_bytes = (size_t)area->width * 4;
+        size_t row_bytes = (size_t)area->width * (session->format[0] / 8);
         unsigned batch_rows = session->row_bytes / row_bytes;
         unsigned end = area->y + area->height;
 
-        /* A camera crop has the display stride, so its rows are not contiguous.
-         * Pack several rows without pixel conversion. Sending every 2.5 KiB
-         * scanline separately otherwise dominates the single-core CPU cost. */
+        /* Pack both native pixels and negotiated formats into bounded batches.
+         * RGB565 halves the wire payload but must not double socket-call cost
+         * by sending each converted scanline separately. */
         for (y = area->y; y < end;)
         {
             unsigned rows = end - y < batch_rows ? end - y : batch_rows;
@@ -562,9 +591,9 @@ static int send_rectangle(struct vnc_rfb_session *session, const struct vnc_rfb_
 
             for (row = 0; row < rows; row++)
             {
-                memcpy(session->row + row * row_bytes,
-                       session->pixels + (size_t)(y + row) * session->width + area->x,
-                       row_bytes);
+                encode_row(session,
+                           session->pixels + (size_t)(y + row) * session->width + area->x,
+                           area->width, session->row + row * row_bytes);
             }
 
             if (send_exact(session, session->row, rows * row_bytes))
@@ -573,15 +602,6 @@ static int send_rectangle(struct vnc_rfb_session *session, const struct vnc_rfb_
             }
 
             y += rows;
-        }
-    }
-    else
-    {
-        for (y = area->y; y < (unsigned)area->y + area->height; y++)
-        {
-            encode_row(session, session->pixels + (size_t)y * session->width + area->x, area->width);
-            if (send_exact(session, session->row, (size_t)area->width * (session->format[0] / 8)))
-                return -1;
         }
     }
     if (session->previous)

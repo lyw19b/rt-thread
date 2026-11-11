@@ -46,6 +46,7 @@ struct vnc_rfb_session
     uint32_t *previous;
     uint8_t *row;
     size_t row_bytes;
+    /* Optional valid preference before handshake; negotiated format afterward. */
     uint8_t format[16];
     struct vnc_rfb_rectangle requested;
     uint64_t delivered_sequence;

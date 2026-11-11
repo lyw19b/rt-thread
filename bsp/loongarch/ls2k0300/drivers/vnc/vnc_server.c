@@ -36,6 +36,7 @@ static uint64_t received_bytes, sent_bytes;
 static uint32_t pointer_events, pointer_releases, last_pointer_tick;
 static uint64_t probe_ticks, send_ticks, pause_ticks, snapshot_ticks, update_ticks;
 static uint32_t send_calls, update_calls;
+static uint32_t negotiated_bits;
 
 static int socket_receive(void *context, void *data, size_t size)
 {
@@ -134,6 +135,12 @@ static void serve_client(int socket)
     connection.socket = socket;
     connection.session.width = LCD_WIDTH;
     connection.session.height = LCD_HEIGHT;
+    /* Limit only remote-display color depth. Camera RGB and NPU input remain
+     * full precision; standard clients may request 24-bit color explicitly. */
+    const uint8_t display_format[16] = {
+        16, 16, 0, 1, 0, 31, 0, 63, 0, 31, 11, 5, 0, 0, 0, 0
+    };
+    rt_memcpy(connection.session.format, display_format, sizeof(display_format));
     connection.session.pixels = rt_malloc(VNC_FRAME_BYTES);
     connection.session.previous = rt_malloc(VNC_FRAME_BYTES);
     connection.session.row_bytes = VNC_ROW_BATCH_BYTES;
@@ -155,6 +162,7 @@ static void serve_client(int socket)
     if (vnc_rfb_handshake(&connection.session))
         goto cleanup;
     connection.pump_input = 1;
+    __atomic_store_n(&negotiated_bits, connection.session.format[0], __ATOMIC_RELAXED);
     rt_kprintf("VNC: viewer connected\n");
 
     for (;;)
@@ -168,6 +176,7 @@ static void serve_client(int socket)
         result = select(socket + 1, &readable, RT_NULL, RT_NULL, &poll_timeout);
         if (result < 0 || (result > 0 && vnc_rfb_receive_message(&connection.session)))
             break;
+        __atomic_store_n(&negotiated_bits, connection.session.format[0], __ATOMIC_RELAXED);
 
         if ((rt_tick_t)(rt_tick_get() - last_update) >=
             rt_tick_from_millisecond(VNC_UPDATE_INTERVAL_MS))
@@ -264,12 +273,13 @@ INIT_APP_EXPORT(vnc_server_init);
 static long vnc_status(void)
 {
     extern void vnc_net_heap_report(void);
-    rt_kprintf("VNC rx=%llu tx=%llu pointer=%u releases=%u last_input_tick=%u now=%u\n",
+    rt_kprintf("VNC rx=%llu tx=%llu pointer=%u releases=%u last_input_tick=%u now=%u format_bpp=%u\n",
         (unsigned long long)__atomic_load_n(&received_bytes, __ATOMIC_RELAXED),
         (unsigned long long)__atomic_load_n(&sent_bytes, __ATOMIC_RELAXED),
         __atomic_load_n(&pointer_events, __ATOMIC_RELAXED),
         __atomic_load_n(&pointer_releases, __ATOMIC_RELAXED),
-        __atomic_load_n(&last_pointer_tick, __ATOMIC_RELAXED), rt_tick_get());
+        __atomic_load_n(&last_pointer_tick, __ATOMIC_RELAXED), rt_tick_get(),
+        __atomic_load_n(&negotiated_bits, __ATOMIC_RELAXED));
     rt_kprintf("VNC profile ticks probe=%llu send=%llu pause=%llu snapshot=%llu update=%llu "
                "send_calls=%u update_calls=%u hz=%u\n",
         (unsigned long long)__atomic_load_n(&probe_ticks, __ATOMIC_RELAXED),
