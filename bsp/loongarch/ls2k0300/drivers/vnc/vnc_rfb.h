@@ -36,7 +36,8 @@ struct vnc_rfb_session
     struct vnc_rfb_io io;
     uint16_t width, height;
     /* Caller owns these buffers for the entire session: width*height pixels,
-     * and width*4 bytes respectively. The core performs no allocations.
+     * and at least width*4 row bytes. Larger row storage batches cropped Raw
+     * scanlines into fewer transport calls. The core performs no allocations.
      */
     uint32_t *pixels;
     /* Optional last-delivered image, also width*height pixels. Enables dirty
@@ -44,6 +45,7 @@ struct vnc_rfb_session
      */
     uint32_t *previous;
     uint8_t *row;
+    size_t row_bytes;
     uint8_t format[16];
     struct vnc_rfb_rectangle requested;
     uint64_t delivered_sequence;

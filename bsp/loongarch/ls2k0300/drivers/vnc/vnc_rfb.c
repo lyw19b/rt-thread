@@ -140,6 +140,7 @@ int vnc_rfb_handshake(struct vnc_rfb_session *session)
     int minor;
 
     if (!session->width || !session->height || !session->pixels || !session->row ||
+        session->row_bytes < (size_t)session->width * 4 ||
         send_exact(session, version, 12) || receive_exact(session, input, 12))
     {
         return -1;
@@ -491,19 +492,50 @@ static int send_cursor(struct vnc_rfb_session *session)
     return send_exact(session, encoded, 18 * 12 * bytes + sizeof(mask));
 }
 
+/* Camera noise defeats horizontal-run compression. Sample bounded neighboring
+ * pixels before encoding, so dense images use Raw without first constructing
+ * and discarding hundreds of Hextile runs. Raw is mandatory for every viewer.
+ * Flat controls and text continue to benefit from Hextile compression. */
+static int dense_rectangle(const struct vnc_rfb_session *session,
+                           const struct vnc_rfb_rectangle *area)
+{
+    unsigned row, column, changed = 0;
+
+    if (area->width < 32 || area->height < 16)
+    {
+        return 0;
+    }
+
+    for (row = 0; row < 4; row++)
+    {
+        unsigned y = area->y + row * (area->height - 1) / 3;
+
+        for (column = 0; column < 32; column++)
+        {
+            unsigned x = area->x + column * (area->width - 2) / 31;
+            size_t offset = (size_t)y * session->width + x;
+
+            changed += !!((session->pixels[offset] ^ session->pixels[offset + 1]) & 0xffffffU);
+        }
+    }
+
+    return changed > 64;
+}
+
 static int send_rectangle(struct vnc_rfb_session *session, const struct vnc_rfb_rectangle *area)
 {
     uint8_t header[12] = {0};
     unsigned y;
+    int hextile = session->hextile && !dense_rectangle(session, area);
 
     write_u16(header, area->x);
     write_u16(header + 2, area->y);
     write_u16(header + 4, area->width);
     write_u16(header + 6, area->height);
-    header[11] = session->hextile ? 5 : 0;
+    header[11] = hextile ? 5 : 0;
     if (send_exact(session, header, sizeof(header)))
         return -1;
-    if (session->hextile)
+    if (hextile)
     {
         if (send_hextile(session, area))
             return -1;
@@ -513,6 +545,35 @@ static int send_rectangle(struct vnc_rfb_session *session, const struct vnc_rfb_
         if (send_exact(session, session->pixels + (size_t)area->y * session->width,
                        (size_t)area->height * session->width * 4))
             return -1;
+    }
+    else if (native_pixel_format(session))
+    {
+        size_t row_bytes = (size_t)area->width * 4;
+        unsigned batch_rows = session->row_bytes / row_bytes;
+        unsigned end = area->y + area->height;
+
+        /* A camera crop has the display stride, so its rows are not contiguous.
+         * Pack several rows without pixel conversion. Sending every 2.5 KiB
+         * scanline separately otherwise dominates the single-core CPU cost. */
+        for (y = area->y; y < end;)
+        {
+            unsigned rows = end - y < batch_rows ? end - y : batch_rows;
+            unsigned row;
+
+            for (row = 0; row < rows; row++)
+            {
+                memcpy(session->row + row * row_bytes,
+                       session->pixels + (size_t)(y + row) * session->width + area->x,
+                       row_bytes);
+            }
+
+            if (send_exact(session, session->row, rows * row_bytes))
+            {
+                return -1;
+            }
+
+            y += rows;
+        }
     }
     else
     {

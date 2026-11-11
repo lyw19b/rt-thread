@@ -35,7 +35,8 @@
 #define USB_PHY_20MHZ       (1U << 3)
 #define USB_PHY_RESET       (1U << 27)
 #define USB_UTMI_RELEASE    (1U << 1)
-#define USB_HOST_AWAKE      ((1U << 28) | (1U << 30))
+#define USB_HOST_SUSPEND    (1U << 30)
+#define USB_HOST_OVERRIDE   (1U << 28)
 
 #ifdef BSP_USING_USB_HOST
 #include "ls2k_usb_platform.h"
@@ -111,7 +112,9 @@ rt_err_t ls2k_usb_board_prepare(void)
     {
         return error;
     }
-    HWREG32(USB_PHY_CONTROL) |= (1U << 4) | USB_HOST_AWAKE;
+    /* Retain the vendor handoff: bit 28 clear lets EHCI control suspend.
+     * Forcing both bits 28/30 high stops controller MMIO on X2K032Z0. */
+    HWREG32(USB_PHY_CONTROL) |= (1U << 4);
     rt_hw_dmb();
     HWREG32(CHIP_RESET_CONTROL) = resets | USB_MODULE_MASK;
     rt_hw_dmb();
@@ -124,8 +127,9 @@ rt_err_t ls2k_usb_board_prepare(void)
         (HWREG32(CHIP_RESET_CONTROL) & USB_MODULE_MASK) != USB_MODULE_MASK ||
         !(HWREG32(PLL_CLOCK_ENABLE) & USB_SOURCE_ENABLE) ||
         (HWREG32(USB_PHY_CONTROL) &
-         (USB_PHY_20MHZ | USB_PHY_RESET | USB_UTMI_RELEASE | USB_HOST_AWAKE)) !=
-            (USB_UTMI_RELEASE | USB_HOST_AWAKE))
+         (USB_PHY_20MHZ | USB_PHY_RESET | USB_UTMI_RELEASE |
+          USB_HOST_SUSPEND | USB_HOST_OVERRIDE)) !=
+            (USB_UTMI_RELEASE | USB_HOST_SUSPEND))
     {
         return -RT_EIO;
     }

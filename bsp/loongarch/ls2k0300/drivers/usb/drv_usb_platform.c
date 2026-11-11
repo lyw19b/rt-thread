@@ -37,9 +37,11 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
 {
     rt_ubase_t companion = LOONGARCH_PHYS_UNCACHED(0x16088000UL);
     rt_ubase_t phy = LOONGARCH_PHYS_UNCACHED(0x16000508UL);
+#ifndef BSP_USING_LS2K0302
     const rt_uint32_t host_override = (1U << 28) | (1U << 30);
-    rt_uint32_t control;
     rt_uint32_t phy_control;
+#endif
+    rt_uint32_t control;
     rt_uint32_t revision;
     rt_err_t error;
 
@@ -89,6 +91,7 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
      * with bit 28=0. After usb stop that leaves CCS=0 on this board. Select
      * the same awake level under software control before starting EHCI.
      * No PHY reset or clock/pulldown/OTG settings are changed. */
+#ifndef BSP_USING_LS2K0302
     phy_control = HWREG32(phy);
     HWREG32(phy) = phy_control | host_override;
     rt_hw_dmb();
@@ -101,6 +104,11 @@ rt_err_t ls2k_usb_platform_init(rt_ubase_t *base, int *irq, unsigned int *hardwa
     rt_thread_mdelay(20);
     rt_kprintf("USB host PHY: %08x -> %08x, software awake\n",
                phy_control, HWREG32(phy));
+#else
+    /* X2K032Z0 needs the original firmware handoff. The other board's
+     * suspend override makes its EHCI/OHCI register access stall. */
+    rt_kprintf("2K0302 USB host PHY: %08x, controller owns suspend\n", HWREG32(phy));
+#endif
 
     error = ls2k_usb_board_power_on();
 

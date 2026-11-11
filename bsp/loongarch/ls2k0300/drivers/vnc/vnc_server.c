@@ -23,6 +23,7 @@
 #define VNC_THREAD_STACK_SIZE 16384
 #define VNC_UPDATE_INTERVAL_MS 16
 #define VNC_TRANSFER_TIMEOUT_MS 3000
+#define VNC_ROW_BATCH_BYTES 32768U
 
 struct vnc_connection
 {
@@ -135,7 +136,8 @@ static void serve_client(int socket)
     connection.session.height = LCD_HEIGHT;
     connection.session.pixels = rt_malloc(VNC_FRAME_BYTES);
     connection.session.previous = rt_malloc(VNC_FRAME_BYTES);
-    connection.session.row = rt_malloc(LCD_WIDTH * 4);
+    connection.session.row_bytes = VNC_ROW_BATCH_BYTES;
+    connection.session.row = rt_malloc(connection.session.row_bytes);
     connection.session.io = (struct vnc_rfb_io){
         .context = &connection, .receive = socket_receive, .send = socket_send,
         .snapshot = snapshot_frame, .pointer = pointer_event,
